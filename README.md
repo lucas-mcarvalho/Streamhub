@@ -125,6 +125,7 @@ Todas as variáveis ficam no arquivo `.env` (modelo em `.env.example`).
 | `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `streamhub` | banco PostgreSQL |
 | `MEDIA_ROOT` | `./media` | pasta do host montada em `/media` em todos os serviços |
 | `DATA_ROOT` | `./data` | configuração persistente dos serviços |
+| `EXTRA_STORAGE` | `./media` | disco extra (ex.: HD externo) montado em `/hd1` em todos os serviços |
 | `PUID` / `PGID` | `1000` | usuário que executa os contêineres (`id -u` / `id -g`) |
 | `TMDB_API_KEY` | vazio | chave v3 ou token v4 do TMDB |
 | `QBIT_USER` / `QBIT_PASSWORD` | `admin` / `adminadmin` | acesso ao qBittorrent |
@@ -141,7 +142,8 @@ As credenciais das integrações também podem ser editadas em **Configurações
 - Todos os contêineres montam `MEDIA_ROOT` em **`/media`**, então o caminho enviado ao qBittorrent é o mesmo visto pelo backend, Sonarr, Radarr e Jellyfin.
 - O backend só aceita pastas dentro de `STORAGE_ALLOWED_ROOTS`. Os destinos são guardados como **local registrado + caminho relativo validado**, nunca como caminho bruto enviado pelo navegador.
 - Os discos exibidos são os do **servidor** que roda o backend, não os do dispositivo que abre o site.
-- **Outro HD:** monte-o em todos os serviços no `docker-compose.yml` (ex.: `/mnt/HD1:/hd1`), inclua `/hd1` em `STORAGE_ALLOWED_ROOTS` e registre a pasta em **Armazenamento**.
+- **HD externo:** monte o disco no computador, defina `EXTRA_STORAGE` no `.env` (ex.: `EXTRA_STORAGE=/run/media/usuario/MEUHD`) e rode `docker compose up -d`. Ele aparece como `/hd1` (já autorizado em `STORAGE_ALLOWED_ROOTS`); registre as pastas em **Armazenamento**. Monte o HD **antes** de iniciar o Docker e evite mover pastas com download ativo.
+- **Biblioteca por fora:** vídeos copiados manualmente para uma pasta registrada (`Nome do Título (Ano)/Titulo.S01E01.mkv`) aparecem sozinhos na biblioteca.
 - **Windows:** aponte `MEDIA_ROOT` para algo como `D:/Midia`; discos extras entram como volumes adicionais.
 
 ## Velocidade dos downloads
@@ -151,6 +153,10 @@ A velocidade depende principalmente dos **seeders** do release. Para baixar mais
 1. Escolha releases com mais seeders (a coluna fica verde a partir de 20).
 2. **Abra a porta `6881` (TCP e UDP) no roteador** apontando para o computador que roda o Docker; o compose já a expõe e o qBittorrent escuta nela.
 3. Indexadores privados costumam ter swarms bem maiores que os públicos.
+
+## Acesso pelo celular
+
+Na mesma rede Wi-Fi, abra `http://IP-DO-COMPUTADOR:5173` no navegador do celular (descubra o IP com `ip -4 addr`). Se não abrir, libere a porta (`sudo ufw allow 5173/tcp`) e confira se o roteador/repetidor não isola os aparelhos. Troque a senha padrão (`APP_ADMIN_PASSWORD`) e ajuste `JELLYFIN_PUBLIC_URL` para o IP do computador.
 
 O qBittorrent do compose vem sem limite de velocidade, com DHT/PEX/LSD ativos e conexões ampliadas (`2000` no total, `300` por torrent).
 
