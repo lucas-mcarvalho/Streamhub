@@ -23,6 +23,7 @@ Aplicação web para **pesquisar, baixar, organizar e assistir filmes, séries e
 ## Recursos
 
 **Catálogo**
+- Dois visuais próprios: **Filmes & Séries** (preto e vermelho, barra superior) e **Animes** (azul-marinho, menu lateral). Um botão alterna entre eles.
 - Filmes e séries pelo **TMDB**; animes pelo **AniList**.
 - Capas, sinopse, **nota**, **gêneros**, ano, formato, estúdio, temporadas e episódios.
 - Filmes e séries mostram **diretores (ou criadores) e elenco principal** com foto.
@@ -32,9 +33,11 @@ Aplicação web para **pesquisar, baixar, organizar e assistir filmes, séries e
 - Adicionar, ativar/desativar, testar e remover indexadores pela interface.
 - Resultados com resolução, tamanho, seeders, indexador, fonte, codec e idioma inferido do nome.
 - Filtros de resolução, áudio, legenda **PT-BR** e **temporada/episódio** (reconhece `S01`, `Season 1`, `Temporada 1`, pacotes `S01-S04`).
+- Seeders coloridos (verde, amarelo, vermelho) para escolher releases mais rápidos.
 
 **Downloads** (via **qBittorrent**)
 - Escolha do disco e da pasta de destino **a cada download**, com espaço livre e bloqueio por falta de espaço.
+- **Seletor de episódios**: em pacotes de temporada, o download pausa assim que a lista de arquivos chega e você marca só o que quer baixar (também disponível depois, pelo botão **Episódios**).
 - Progresso em tempo real (SSE), velocidade, tempo estimado, pausar, retomar, cancelar e apagar arquivos.
 
 **Armazenamento**
@@ -42,7 +45,7 @@ Aplicação web para **pesquisar, baixar, organizar e assistir filmes, séries e
 - Teste de gravação, aviso de pouco espaço e proteção contra *path traversal* e symlinks.
 
 **Biblioteca e player próprio**
-- Grade de pôsteres com nota, gêneros e progresso por episódio; "Continuar assistindo".
+- Grade de pôsteres com nota, gêneros e progresso por episódio; painel de detalhes por título; "Continuar assistindo".
 - Player com **troca de faixa de áudio**, **legendas** (PT-BR escolhida automaticamente quando existe), velocidade, tela cheia, atalhos de teclado e **próximo episódio**.
 - **Conversão no servidor (ffmpeg)** para formatos que o navegador não toca.
 - Exclusão de arquivos pela biblioteca.
@@ -141,11 +144,21 @@ As credenciais das integrações também podem ser editadas em **Configurações
 - **Outro HD:** monte-o em todos os serviços no `docker-compose.yml` (ex.: `/mnt/HD1:/hd1`), inclua `/hd1` em `STORAGE_ALLOWED_ROOTS` e registre a pasta em **Armazenamento**.
 - **Windows:** aponte `MEDIA_ROOT` para algo como `D:/Midia`; discos extras entram como volumes adicionais.
 
+## Velocidade dos downloads
+
+A velocidade depende principalmente dos **seeders** do release. Para baixar mais rápido:
+
+1. Escolha releases com mais seeders (a coluna fica verde a partir de 20).
+2. **Abra a porta `6881` (TCP e UDP) no roteador** apontando para o computador que roda o Docker; o compose já a expõe e o qBittorrent escuta nela.
+3. Indexadores privados costumam ter swarms bem maiores que os públicos.
+
+O qBittorrent do compose vem sem limite de velocidade, com DHT/PEX/LSD ativos e conexões ampliadas (`2000` no total, `300` por torrent).
+
 ## Fluxo de uso
 
 1. **Catálogo** (TMDB/AniList) → página do título, com nota, gêneros, elenco e temporadas.
 2. **Buscar downloads** consulta o Prowlarr; filtre por resolução, áudio, legenda PT-BR e temporada.
-3. **Baixar** → escolha o local e a subpasta; o backend valida o espaço e envia ao qBittorrent com o `savepath`.
+3. **Baixar** → escolha o local e a subpasta; o backend valida o espaço e envia ao qBittorrent com o `savepath`. Em pacotes, deixe marcada a opção **Escolher quais episódios baixar** e selecione os arquivos na página **Downloads**.
 4. **Downloads** acompanha o progresso em tempo real. Ao concluir, o Jellyfin é atualizado e, se habilitado, o Sonarr/Radarr importam copiando o arquivo (o original no destino escolhido é preservado).
 5. **Minha biblioteca** lista os arquivos; clique em um episódio para assistir no player próprio.
 
@@ -162,6 +175,7 @@ Autenticação HTTP Basic. Principais grupos de rotas:
 | `GET/POST /api/indexers` | gerenciamento de indexadores |
 | `GET/POST /api/storage/...` | raízes, pastas registradas, teste e padrão |
 | `POST /api/downloads` · `GET /api/downloads/stream` | iniciar download · progresso (SSE) |
+| `GET/POST /api/downloads/{id}/files` | listar arquivos do torrent e escolher quais baixar |
 | `GET /api/library` · `POST /api/library/delete` | arquivos e exclusão |
 | `GET /api/library/stream/{id}[/transcode\|/subtitle/{n}]` | reprodução com token assinado |
 
@@ -188,12 +202,14 @@ O frontend em desenvolvimento encaminha `/api` para `http://localhost:8080` (var
 | Erro 400 ao adicionar indexador | o site do indexador pode estar fora do ar ou exigir login; a mensagem do Prowlarr é exibida |
 | qBittorrent "usuário ou senha inválidos" | ajuste `QBIT_USER`/`QBIT_PASSWORD` ou edite em Configurações |
 | Sem permissão de gravação | confira `PUID`/`PGID` e o dono das pastas `media/` e `data/` |
+| Download lento | poucos seeders no release; veja [Velocidade dos downloads](#velocidade-dos-downloads) |
 | Vídeo sem som ou não toca | áudio/vídeo incompatível: o player converte no servidor; se persistir, use o Jellyfin |
 
 ## Limitações conhecidas
 
 - O idioma exibido nos resultados é **inferido do nome** do release e não é garantido; as faixas reais aparecem no player.
 - Legendas em formato de imagem não são suportadas no player.
+- Pacotes que vêm como **um único arquivo** (temporada inteira em um MKV) não podem ser divididos pelo seletor de episódios.
 - Autenticação com um único administrador.
 - O progresso de reprodução fica salvo no navegador.
 - Elenco e diretores vêm do TMDB; animes não exibem elenco.
