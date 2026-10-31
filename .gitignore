@@ -1,0 +1,4 @@
+.env
+media/
+data/
+node_modules/

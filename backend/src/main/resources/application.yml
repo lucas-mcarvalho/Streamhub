@@ -1,0 +1,46 @@
+spring:
+  application:
+    name: streamhub
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/streamhub}
+    username: ${DB_USER:streamhub}
+    password: ${DB_PASSWORD:streamhub}
+  mvc:
+    async:
+      request-timeout: -1
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+
+server:
+  port: ${SERVER_PORT:8080}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+streamhub:
+  admin:
+    username: ${APP_ADMIN_USER:admin}
+    password: ${APP_ADMIN_PASSWORD:admin}
+  cors:
+    allowed-origins: ${APP_CORS_ORIGINS:http://localhost:5173}
+  secret: ${APP_SECRET:change-me-in-production}
+  integrations:
+    config-dir: ${INTEGRATIONS_CONFIG_DIR:/integrations}
+    arr-import-on-complete: ${ARR_IMPORT_ON_COMPLETE:false}
+    tmdb: { key: "${TMDB_API_KEY:}" }
+    prowlarr: { url: "${PROWLARR_URL:}", key: "${PROWLARR_API_KEY:}" }
+    sonarr: { url: "${SONARR_URL:}", key: "${SONARR_API_KEY:}" }
+    radarr: { url: "${RADARR_URL:}", key: "${RADARR_API_KEY:}" }
+    qbittorrent: { url: "${QBIT_URL:}", username: "${QBIT_USER:admin}", key: "${QBIT_PASSWORD:}" }
+    jellyfin: { url: "${JELLYFIN_URL:}", key: "${JELLYFIN_API_KEY:}", public-url: "${JELLYFIN_PUBLIC_URL:http://localhost:8096}" }
+  storage:
+    allowed-roots: ${STORAGE_ALLOWED_ROOTS:/media}
+    min-free-gb: ${STORAGE_MIN_FREE_GB:5}
+    qbit-path-map: ${QBIT_PATH_MAP:}
