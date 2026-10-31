@@ -55,4 +55,28 @@ final class ReleaseParser {
         if (has(t, "vostfr")) out.add("Francês");
         return out;
     }
+
+    /** Temporada inicial, final (pacotes S01-S04) e episódio, quando o nome os indica; nulos se não houver. */
+    record SeasonInfo(Integer season, Integer seasonEnd, Integer episode) {}
+
+    private static final Pattern RANGE = Pattern.compile("\\bS(\\d{1,2})\\s?[-~–]\\s?S?(\\d{1,2})\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SXXEYY = Pattern.compile("\\bS(\\d{1,2})(?:\\s?E(\\d{1,4}))?\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern WORDS = Pattern.compile(
+        "(?:\\bseason[ ._-]?(\\d{1,2})\\b|\\b(\\d{1,2})(?:st|nd|rd|th)[ ._-]season\\b|\\btemporada[ ._-]?(\\d{1,2})\\b|\\b(\\d{1,2})[ªa]?[ ._-]temporada\\b)",
+        Pattern.CASE_INSENSITIVE);
+
+    static SeasonInfo season(String t) {
+        var r = RANGE.matcher(t);
+        if (r.find()) return new SeasonInfo(Integer.valueOf(r.group(1)), Integer.valueOf(r.group(2)), null);
+        var m = SXXEYY.matcher(t);
+        if (m.find()) {
+            Integer ep = m.group(2) == null ? null : Integer.valueOf(m.group(2));
+            return new SeasonInfo(Integer.valueOf(m.group(1)), null, ep);
+        }
+        var w = WORDS.matcher(t);
+        if (w.find()) {
+            for (int i = 1; i <= 4; i++) if (w.group(i) != null) return new SeasonInfo(Integer.valueOf(w.group(i)), null, null);
+        }
+        return new SeasonInfo(null, null, null);
+    }
 }

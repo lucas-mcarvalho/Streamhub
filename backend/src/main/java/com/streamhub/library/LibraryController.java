@@ -76,6 +76,13 @@ public class LibraryController {
         return service.subtitleVtt(id, index);
     }
 
+    public record DeleteRequest(List<String> ids) {}
+
+    @PostMapping("/delete")
+    public Map<String, Integer> delete(@org.springframework.web.bind.annotation.RequestBody DeleteRequest req) {
+        return Map.of("deleted", service.delete(req.ids() == null ? List.of() : req.ids()));
+    }
+
     @PostMapping("/refresh")
     public void refresh() { jellyfin.refreshLibrary(); }
 

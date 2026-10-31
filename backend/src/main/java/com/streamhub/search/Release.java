@@ -9,4 +9,5 @@ import java.util.List;
 public record Release(String guid, String title, String resolution, String source, String codec, long sizeBytes,
                       Integer seeders, Integer leechers, String indexer, Long indexerId, String publishDate,
                       String magnetUrl, String downloadUrl, String infoUrl, List<String> audioHints,
-                      List<String> subtitleHints, boolean languagesVerified) {}
+                      List<String> subtitleHints, boolean languagesVerified, Integer season, Integer seasonEnd,
+                      Integer episode) {}

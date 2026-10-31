@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, fmtBytes, kindLabel, type Location, type Root } from '../api'
-import { Bar, btn, btnGhost, input, Modal, Notice, Spinner } from '../components/ui'
+import { Bar, btn, btnGhost, input, Modal, Notice, PageTitle, Spinner } from '../components/ui'
 import { useToast } from '../components/Toast'
 import { useAsync } from '../hooks'
 
@@ -39,9 +39,9 @@ function AddModal({ roots, onClose, onDone }: { roots: Root[]; onClose: () => vo
         <button className={btnGhost} disabled={!path} onClick={() => browse(root, parent)}>↑</button>
         <span className="truncate text-zinc-300">/{path}</span>
       </div>
-      <ul className="mb-3 max-h-40 overflow-auto rounded border border-zinc-800 text-sm">
+      <ul className="mb-3 max-h-40 overflow-auto rounded border border-line text-sm">
         {dirs.length === 0 && <li className="px-3 py-2 text-zinc-500">Sem subpastas</li>}
-        {dirs.map((d) => <li key={d.relativePath} className="cursor-pointer px-3 py-1.5 hover:bg-zinc-800" onClick={() => browse(root, d.relativePath)}>📁 {d.name}</li>)}
+        {dirs.map((d) => <li key={d.relativePath} className="cursor-pointer px-3 py-1.5 hover:bg-surface2" onClick={() => browse(root, d.relativePath)}>📁 {d.name}</li>)}
       </ul>
       <label className="text-xs text-zinc-400">Ou digite uma subpasta (será criada se não existir)</label>
       <input className={input + ' mb-3'} value={path} onChange={(e) => setPath(e.target.value)} placeholder="ex.: Filmes/4K" />
@@ -68,7 +68,7 @@ export default function Storage() {
   return (
     <div>
       <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Armazenamento</h1>
+        <PageTitle sub="Discos e pastas do servidor">Armazenamento</PageTitle>
         <button className={btn} onClick={() => setAdding(true)} disabled={!roots.data?.length}>+ Registrar pasta</button>
       </div>
       <p className="mb-4 text-sm text-zinc-400">Os discos e pastas listados são os do <b>servidor</b> que executa o backend, não do dispositivo do navegador.</p>
@@ -77,7 +77,7 @@ export default function Storage() {
       {roots.loading ? <Spinner /> : (
         <div className="mb-8 grid gap-3 md:grid-cols-2">
           {roots.data?.map((r) => (
-            <div key={r.index} className="rounded-lg bg-zinc-900 p-4">
+            <div key={r.index} className="rounded-lg bg-surface p-4">
               <div className="mb-2 flex justify-between text-sm"><span className="font-mono">{r.path}</span>{!r.exists && <span className="text-red-400">não existe</span>}</div>
               <Bar percent={r.usage.total ? (r.usage.used / r.usage.total) * 100 : 0} />
               <div className="mt-1 text-xs text-zinc-400">{fmtBytes(r.usage.used)} usados · {fmtBytes(r.usage.free)} livres de {fmtBytes(r.usage.total)}</div>
@@ -91,7 +91,7 @@ export default function Storage() {
       {locs.data?.length === 0 && <Notice text="Nenhuma pasta registrada. Registre ao menos uma pasta do tipo Geral para poder baixar." />}
       <div className="grid gap-3 md:grid-cols-2">
         {locs.data?.map((l) => (
-          <div key={l.id} className="rounded-lg bg-zinc-900 p-4">
+          <div key={l.id} className="rounded-lg bg-surface p-4">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <div className="font-medium">{l.name} {l.isDefault && <span className="ml-1 rounded bg-red-700 px-1.5 text-xs">padrão</span>}</div>

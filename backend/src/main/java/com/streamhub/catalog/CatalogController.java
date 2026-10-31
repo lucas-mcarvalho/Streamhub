@@ -16,15 +16,28 @@ public class CatalogController {
     public CatalogController(CatalogService service) { this.service = service; }
 
     @GetMapping("/home")
-    public List<Section> home() { return service.home(); }
+    public List<Section> home(@RequestParam(required = false) String mode) { return service.home(mode); }
 
     @GetMapping("/search")
     public List<Section> search(@RequestParam String q) { return service.search(q); }
 
     @GetMapping("/discover")
     public List<CatalogItem> discover(@RequestParam String kind, @RequestParam(required = false) String q,
+                                      @RequestParam(required = false) String sort,
+                                      @RequestParam(required = false) String genre,
                                       @RequestParam(defaultValue = "1") int page) {
-        return service.discover(kind, q, page);
+        return service.discover(kind, q, sort, genre, page);
+    }
+
+    @GetMapping("/genres")
+    public List<Genre> genres(@RequestParam String kind) { return service.genres(kind); }
+
+    /** Capa e dados do catálogo para o nome de uma pasta da biblioteca; 204 quando não há correspondência. */
+    @GetMapping("/match")
+    public org.springframework.http.ResponseEntity<CatalogItem> match(@RequestParam String title,
+                                                                      @RequestParam(defaultValue = "GENERAL") String kind) {
+        return service.match(title, kind).map(org.springframework.http.ResponseEntity::ok)
+            .orElseGet(() -> org.springframework.http.ResponseEntity.noContent().build());
     }
 
     @GetMapping("/title/{source}/{type}/{id}")

@@ -47,7 +47,9 @@ public class Download {
     private long upSpeed;
     @Column(name = "eta_seconds")
     private Long etaSeconds;
-    /** QUEUED, DOWNLOADING, PAUSED, COMPLETED, ERROR */
+    @Column(name = "awaiting_selection")
+    private boolean awaitingSelection;
+    /** QUEUED, DOWNLOADING, PAUSED, SELECTING, COMPLETED, ERROR */
     private String status = "QUEUED";
     @Column(name = "error_message", columnDefinition = "text")
     private String errorMessage;
