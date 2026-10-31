@@ -30,10 +30,13 @@ import com.streamhub.storage.StorageService;
 @Service
 public class DownloadService {
     private static final Logger log = LoggerFactory.getLogger(DownloadService.class);
-    private static final Set<String> ACTIVE = Set.of("QUEUED", "DOWNLOADING", "PAUSED");
+    private static final Set<String> ACTIVE = Set.of("QUEUED", "DOWNLOADING", "PAUSED", "SELECTING");
 
     public record StartRequest(String title, String kind, String catalogRef, String indexer, String magnetUrl,
-                               String downloadUrl, long sizeBytes, Long locationId, String relativePath) {}
+                               String downloadUrl, long sizeBytes, Long locationId, String relativePath,
+                               Boolean chooseFiles) {}
+
+    public record FileEntry(int index, String name, long size, double progress, boolean selected) {}
 
     private final DownloadRepository repo;
     private final StorageService storage;
@@ -105,6 +108,7 @@ public class DownloadService {
         d.setSavePath(dest.toString());
         d.setSizeBytes(r.sizeBytes());
         d.setTag("pending");
+        d.setAwaitingSelection(Boolean.TRUE.equals(r.chooseFiles()));
         d = repo.save(d);
         d.setTag("sh-" + d.getId());
         try {
@@ -129,6 +133,45 @@ public class DownloadService {
     private String hashOf(Download d) {
         if (d.getHash() != null) return d.getHash();
         throw new ApiException(HttpStatus.CONFLICT, "NOT_READY", "O qBittorrent ainda não registrou este download");
+    }
+
+    public List<FileEntry> files(long id) {
+        Download d = get(id);
+        String hash = hashOf(d);
+        List<Map<String, Object>> raw = qbit.files(hash);
+        if (raw == null || raw.isEmpty()) {
+            throw new ApiException(HttpStatus.CONFLICT, "NO_METADATA", "Os metadados do torrent ainda não chegaram. Tente em instantes.");
+        }
+        List<FileEntry> out = new java.util.ArrayList<>();
+        for (int i = 0; i < raw.size(); i++) {
+            Map<String, Object> f = raw.get(i);
+            Integer idx = J.integer(f.get("index"));
+            Long prio = J.lng(f.get("priority"));
+            out.add(new FileEntry(idx == null ? i : idx, J.str(f.get("name")), J.lng(f.get("size")) == null ? 0 : J.lng(f.get("size")),
+                J.dbl(f.get("progress")) == null ? 0 : J.dbl(f.get("progress")), prio == null || prio > 0));
+        }
+        return out;
+    }
+
+    /** Baixa só os arquivos escolhidos; os demais ficam com prioridade 0. */
+    public void selectFiles(long id, List<Integer> selected) {
+        Download d = get(id);
+        String hash = hashOf(d);
+        if (selected == null || selected.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "NOTHING_SELECTED", "Selecione ao menos um arquivo");
+        }
+        List<FileEntry> all = files(id);
+        long need = all.stream().filter(f -> selected.contains(f.index())).mapToLong(f -> (long) (f.size() * (1 - f.progress()))).sum();
+        storage.requireSpace(Path.of(d.getSavePath()), need);
+        List<Integer> skip = all.stream().map(FileEntry::index).filter(i -> !selected.contains(i)).toList();
+        qbit.setFilePriority(hash, selected, 1);
+        qbit.setFilePriority(hash, skip, 0);
+        if ("SELECTING".equals(d.getStatus()) || "PAUSED".equals(d.getStatus())) {
+            qbit.resume(hash);
+            d.setStatus("DOWNLOADING");
+            repo.save(d);
+        }
+        publish();
     }
 
     public void pause(long id) {
@@ -217,7 +260,30 @@ public class DownloadService {
         Long eta = J.lng(t.get("eta"));
         d.setEtaSeconds(eta == null || eta >= 8640000 ? null : eta);
         d.setContentPath(J.str(t.get("content_path")));
-        String status = mapState(J.str(t.get("state")), progress);
+        String state = J.str(t.get("state"));
+        if (d.isAwaitingSelection() && total > 0 && !"metaDL".equals(state) && !"forcedMetaDL".equals(state)) {
+            // metadados prontos: zera as prioridades e pausa, para o usuário escolher os arquivos
+            try {
+                List<Integer> all = new java.util.ArrayList<>();
+                List<Map<String, Object>> fs = qbit.files(d.getHash());
+                for (int i = 0; i < fs.size(); i++) all.add(i);
+                qbit.setFilePriority(d.getHash(), all, 0);
+                qbit.pause(d.getHash());
+                d.setAwaitingSelection(false);
+                d.setStatus("SELECTING");
+                d.setDlSpeed(0);
+                d.setEtaSeconds(null);
+                repo.save(d);
+            } catch (RuntimeException e) {
+                log.warn("Falha ao preparar a seleção de arquivos do download {}: {}", d.getId(), e.getMessage());
+            }
+            return;
+        }
+        if ("SELECTING".equals(prev)) {
+            repo.save(d);
+            return;
+        }
+        String status = mapState(state, progress);
         d.setStatus(status);
         if (status.equals("ERROR")) d.setErrorMessage("Erro reportado pelo qBittorrent (" + t.get("state") + ")");
         if (status.equals("COMPLETED") && !prev.equals("COMPLETED")) {

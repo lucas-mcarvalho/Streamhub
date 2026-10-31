@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api, type Indexer, type Integration } from '../api'
-import { btn, btnGhost, input, Modal, Notice, Spinner } from '../components/ui'
+import { btn, btnGhost, input, Modal, Notice, PageTitle, Spinner } from '../components/ui'
 import { useToast } from '../components/Toast'
 import { useAsync } from '../hooks'
 
@@ -22,7 +22,7 @@ function IntegrationRow({ it, onSaved }: { it: Integration; onSaved: () => void 
     toast(`${it.label}: ${r.message}`, r.ok ? 'ok' : 'err')
   }
   return (
-    <div className="rounded-lg bg-zinc-900 p-4">
+    <div className="rounded-lg bg-surface p-4">
       <div className="mb-2 flex items-center justify-between">
         <span className="font-medium">{it.label}</span>
         <span className={`text-xs ${it.configured ? 'text-emerald-400' : 'text-zinc-500'}`}>{it.configured ? `configurado (${it.source})` : 'não configurado'}</span>
@@ -56,7 +56,7 @@ function AddIndexer({ onClose, onDone }: { onClose: () => void; onDone: () => vo
           {schema.loading ? <Spinner /> : schema.error ? <Notice text={schema.error} /> : (
             <ul className="max-h-72 overflow-auto text-sm">
               {schema.data?.filter((s) => s.name.toLowerCase().includes(filter.toLowerCase())).slice(0, 100).map((s) => (
-                <li key={s.definitionName} className="cursor-pointer px-2 py-1.5 hover:bg-zinc-800" onClick={() => setSel(s)}>{s.name} <span className="text-xs text-zinc-500">{s.privacy} · {s.protocol}</span></li>
+                <li key={s.definitionName} className="cursor-pointer px-2 py-1.5 hover:bg-surface2" onClick={() => setSel(s)}>{s.name} <span className="text-xs text-zinc-500">{s.privacy} · {s.protocol}</span></li>
               ))}
             </ul>
           )}
@@ -85,7 +85,7 @@ export default function Settings() {
   }
   return (
     <div>
-      <h1 className="mb-4 text-2xl font-bold">Configurações</h1>
+      <PageTitle sub="Integrações e indexadores">Configurações</PageTitle>
       <h2 className="mb-2 text-lg font-semibold">Integrações</h2>
       <p className="mb-3 text-sm text-zinc-400">Credenciais são guardadas cifradas no banco. Chaves do Prowlarr/Sonarr/Radarr são lidas automaticamente do config.xml quando disponível.</p>
       <div className="mb-8 space-y-3">{ints.loading ? <Spinner /> : ints.data?.map((i) => <IntegrationRow key={i.service} it={i} onSaved={ints.reload} />)}</div>
@@ -98,7 +98,7 @@ export default function Settings() {
       {idx.data?.length === 0 && <p className="text-sm text-zinc-500">Nenhum indexador cadastrado.</p>}
       <div className="space-y-2">
         {idx.data?.map((i) => (
-          <div key={i.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-zinc-900 p-3">
+          <div key={i.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface p-3">
             <div>
               <span className="font-medium">{i.name}</span>
               <span className="ml-2 text-xs text-zinc-500">{i.privacy} · {i.protocol}</span>

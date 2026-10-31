@@ -246,6 +246,37 @@ public class LibraryService {
         }
     }
 
+    /** Apaga os arquivos de vídeo informados e remove as pastas que ficarem vazias (sem sair do local registrado). */
+    public int delete(List<String> ids) {
+        int deleted = 0;
+        for (String id : ids) {
+            Path p = resolve(id);
+            StorageLocation loc;
+            try {
+                String raw = new String(Base64.getUrlDecoder().decode(id), StandardCharsets.UTF_8);
+                loc = storage.get(Long.parseLong(raw.substring(0, raw.indexOf('|'))));
+            } catch (RuntimeException e) {
+                throw new ApiException(HttpStatus.NOT_FOUND, "NO_FILE", "Arquivo não encontrado");
+            }
+            Path base = Path.of(loc.getPath()).toAbsolutePath().normalize();
+            try {
+                Files.delete(p);
+                deleted++;
+                Path dir = p.getParent();
+                while (dir != null && !dir.equals(base) && dir.startsWith(base)) {
+                    try (Stream<Path> s = Files.list(dir)) {
+                        if (s.findAny().isPresent()) break;
+                    }
+                    Files.delete(dir);
+                    dir = dir.getParent();
+                }
+            } catch (IOException e) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "DELETE_FAILED", "Não foi possível apagar: " + e.getMessage());
+            }
+        }
+        return deleted;
+    }
+
     // ---------- token de streaming (a tag <video> não envia cabeçalho Authorization) ----------
 
     private String sign(String data) {

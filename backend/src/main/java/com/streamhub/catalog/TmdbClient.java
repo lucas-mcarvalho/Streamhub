@@ -78,7 +78,8 @@ public class TmdbClient {
             J.str(movie ? m.get("original_title") : m.get("original_name")), J.str(m.get("overview")),
             img(m.get("poster_path"), "w342"), img(m.get("backdrop_path"), "w1280"),
             year(J.str(movie ? m.get("release_date") : m.get("first_air_date"))), J.dbl(m.get("vote_average")), genres,
-            J.integer(m.get("number_of_episodes")), J.integer(m.get("number_of_seasons")), J.str(m.get("status")), runtime);
+            J.integer(m.get("number_of_episodes")), J.integer(m.get("number_of_seasons")), J.str(m.get("status")), runtime, null,
+            J.str(J.at(J.list(m.get("production_companies")).stream().findFirst().orElse(null), "name")));
     }
 
     /** Animes japoneses (animação + origem JP) são tratados pelo AniList, não pela lista de séries. */
@@ -104,7 +105,54 @@ public class TmdbClient {
         return mapList(get("/search/" + type, "query", q, "page", page), type);
     }
 
+    public List<CatalogItem> topRated(String type, int page) { return mapList(get("/" + type + "/top_rated", "page", page), type); }
+
+    public List<Genre> genreList(String type) {
+        List<Genre> out = new ArrayList<>();
+        genres(type).forEach((id, name) -> out.add(new Genre(String.valueOf(id), name)));
+        out.sort(java.util.Comparator.comparing(Genre::name));
+        return out;
+    }
+
+    /** sort: POPULAR, SCORE ou NEW; genreId opcional. */
+    public List<CatalogItem> discover(String type, String sort, String genreId, int page) {
+        boolean movie = type.equals("movie");
+        String sortBy = switch (sort == null ? "POPULAR" : sort) {
+            case "SCORE" -> "vote_average.desc";
+            case "NEW" -> movie ? "primary_release_date.desc" : "first_air_date.desc";
+            default -> "popularity.desc";
+        };
+        String today = java.time.LocalDate.now().toString();
+        return mapList(get("/discover/" + type, "page", page, "sort_by", sortBy, "with_genres", genreId,
+            "vote_count.gte", "SCORE".equals(sort) ? 500 : ("NEW".equals(sort) ? 20 : 0),
+            movie ? "primary_release_date.lte" : "first_air_date.lte", "NEW".equals(sort) ? today : null), type);
+    }
+
     public CatalogItem details(String type, String id) { return map(get("/" + type + "/" + id), type); }
+
+    private static Person person(Map<String, Object> m, String role) {
+        return new Person(J.str(m.get("name")), role, img(m.get("profile_path"), "w185"));
+    }
+
+    /** Diretores (ou criadores, em séries) e os principais atores. */
+    public Map.Entry<List<Person>, List<Person>> credits(String type, String id) {
+        Map<String, Object> credits = get("/" + type + "/" + id + "/credits");
+        List<Person> directors = new ArrayList<>();
+        if (type.equals("tv")) {
+            for (Map<String, Object> c : J.maps(get("/tv/" + id).get("created_by"))) directors.add(person(c, "Criação"));
+        }
+        for (Map<String, Object> c : J.maps(credits.get("crew"))) {
+            if ("Director".equals(c.get("job")) && directors.stream().noneMatch(d -> d.name().equals(J.str(c.get("name"))))) {
+                directors.add(person(c, "Direção"));
+            }
+        }
+        List<Person> cast = new ArrayList<>();
+        for (Map<String, Object> c : J.maps(credits.get("cast"))) {
+            if (cast.size() >= 14) break;
+            cast.add(person(c, J.str(c.get("character"))));
+        }
+        return Map.entry(directors.size() > 4 ? directors.subList(0, 4) : directors, cast);
+    }
 
     public List<Season> seasons(String id) {
         List<Season> out = new ArrayList<>();

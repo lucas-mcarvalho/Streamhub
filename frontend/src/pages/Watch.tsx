@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { ArrowLeft, Maximize, Pause, Play, RotateCcw, RotateCw, SkipForward, Volume2, VolumeX } from 'lucide-react'
 import { api, type AudioTrack, type LibraryFile, type MediaInfo, type SubTrack } from '../api'
 import { Notice } from '../components/ui'
 
@@ -84,6 +85,7 @@ export default function Watch() {
         const pt = i.subtitles.find((s) => s.language === 'por' && s.textBased && /brazil/i.test(s.title ?? ''))
           ?? i.subtitles.find((s) => s.language === 'por' && s.textBased)
         setSubIdx(pt ? pt.index : -1)
+        localStorage.setItem('streamhub.dur.' + id, String(i.duration))
         setInfo(i); setToken(t.token)
       })
       .catch((e) => setErr(e.message))
@@ -110,9 +112,9 @@ export default function Watch() {
 
   // salva posição
   useEffect(() => {
-    const t = setInterval(() => { if (playing && abs > 0) localStorage.setItem(posKey, String(abs)) }, 5000)
+    const t = setInterval(() => { if (playing && abs > 0) { localStorage.setItem(posKey, String(abs)); localStorage.setItem('streamhub.last.' + id, String(Date.now())); localStorage.removeItem('streamhub.done.' + id) } }, 5000)
     return () => clearInterval(t)
-  }, [playing, abs, posKey])
+  }, [playing, abs, posKey, id])
 
   const seek = useCallback((t: number) => {
     const target = Math.max(0, Math.min(t, (info?.duration ?? t) - 1))
@@ -169,7 +171,7 @@ export default function Watch() {
   return (
     <div>
       <div className="mb-2 flex items-center justify-between text-sm">
-        <Link to="/library" className="text-zinc-400 hover:text-white">← Biblioteca</Link>
+        <Link to="/library" className="flex items-center gap-1 text-zinc-400 hover:text-white"><ArrowLeft size={16} />Biblioteca</Link>
         <span className="truncate pl-4 text-zinc-300">{file?.group} {file?.season != null ? `· T${file.season} E${file.episode}` : ''}</span>
       </div>
       <div ref={box} onMouseMove={poke} onMouseLeave={() => playing && setShowUi(false)}
@@ -182,7 +184,7 @@ export default function Watch() {
             onLoadedMetadata={(e) => {
               if (pending.current != null && mode === 'direct') { e.currentTarget.currentTime = pending.current; pending.current = null }
             }}
-            onEnded={() => { localStorage.removeItem(posKey); if (next) nav('/watch/' + next.id) }}
+            onEnded={() => { localStorage.removeItem(posKey); localStorage.setItem('streamhub.done.' + id, '1'); if (next) nav('/watch/' + next.id) }}
             onError={() => {
               if (mode === 'direct') { setErr(undefined); setOffset(abs); setCur(0); setMode('transcode') }
               else setErr('Não foi possível reproduzir este arquivo.')
@@ -196,33 +198,33 @@ export default function Watch() {
         )}
         <div className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent px-4 pb-3 pt-10 transition-opacity ${uiVisible ? 'opacity-100' : 'pointer-events-none opacity-0'}`}>
           <input type="range" min={0} max={Math.max(1, Math.floor(duration))} value={Math.floor(abs)} onChange={(e) => seek(Number(e.target.value))}
-            className="mb-2 h-1 w-full cursor-pointer accent-red-500" aria-label="Posição" />
+            className="mb-2 h-1 w-full cursor-pointer accent-accent-500" aria-label="Posição" />
           <div className="flex flex-wrap items-center gap-3 text-sm">
-            <button onClick={toggle} className="w-8 text-xl" aria-label="Reproduzir/Pausar">{playing ? '❚❚' : '▶'}</button>
-            <button onClick={() => seek(abs - 10)} className="text-zinc-300 hover:text-white" title="Voltar 10s (←)">⟲ 10</button>
-            <button onClick={() => seek(abs + 10)} className="text-zinc-300 hover:text-white" title="Avançar 10s (→)">10 ⟳</button>
+            <button onClick={toggle} className="grid h-9 w-9 place-items-center rounded-full bg-white/10 transition hover:bg-accent-600" aria-label="Reproduzir/Pausar">{playing ? <Pause size={24} fill="white" /> : <Play size={24} fill="white" />}</button>
+            <button onClick={() => seek(abs - 10)} className="text-zinc-300 hover:text-white" title="Voltar 10s (←)"><RotateCcw size={20} /></button>
+            <button onClick={() => seek(abs + 10)} className="text-zinc-300 hover:text-white" title="Avançar 10s (→)"><RotateCw size={20} /></button>
             <span className="tabular-nums text-zinc-300">{fmt(abs)} / {fmt(duration)}</span>
             <span className="flex items-center gap-1">
-              <button onClick={() => setMuted(!muted)} title="Mudo (m)">{muted || volume === 0 ? '🔇' : '🔊'}</button>
-              <input type="range" min={0} max={1} step={0.05} value={muted ? 0 : volume} onChange={(e) => { setVolume(Number(e.target.value)); setMuted(false) }} className="w-20 accent-red-500" aria-label="Volume" />
+              <button onClick={() => setMuted(!muted)} title="Mudo (m)">{muted || volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}</button>
+              <input type="range" min={0} max={1} step={0.05} value={muted ? 0 : volume} onChange={(e) => { setVolume(Number(e.target.value)); setMuted(false) }} className="w-20 accent-accent-500" aria-label="Volume" />
             </span>
             <span className="ml-auto flex flex-wrap items-center gap-2">
               {info && info.audio.length > 1 && (
-                <select value={audio} onChange={(e) => changeAudio(Number(e.target.value))} className="max-w-40 rounded bg-zinc-800/90 px-2 py-1 text-xs" title="Áudio">
+                <select value={audio} onChange={(e) => changeAudio(Number(e.target.value))} className="max-w-40 rounded bg-surface2/90 px-2 py-1 text-xs" title="Áudio">
                   {info.audio.map((a) => <option key={a.index} value={a.index}>🔊 {audioLabel(a)}</option>)}
                 </select>
               )}
               {info && info.subtitles.length > 0 && (
-                <select value={subIdx} onChange={(e) => setSubIdx(Number(e.target.value))} className="max-w-48 rounded bg-zinc-800/90 px-2 py-1 text-xs" title="Legenda">
+                <select value={subIdx} onChange={(e) => setSubIdx(Number(e.target.value))} className="max-w-48 rounded bg-surface2/90 px-2 py-1 text-xs" title="Legenda">
                   <option value={-1}>💬 Sem legenda</option>
                   {info.subtitles.map((s) => <option key={s.index} value={s.index} disabled={!s.textBased}>💬 {subLabel(s)}</option>)}
                 </select>
               )}
-              <select value={rate} onChange={(e) => setRate(Number(e.target.value))} className="rounded bg-zinc-800/90 px-2 py-1 text-xs" title="Velocidade">
+              <select value={rate} onChange={(e) => setRate(Number(e.target.value))} className="rounded bg-surface2/90 px-2 py-1 text-xs" title="Velocidade">
                 {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => <option key={r} value={r}>{r}x</option>)}
               </select>
-              {next && <button onClick={() => nav('/watch/' + next.id)} className="rounded bg-zinc-800/90 px-2 py-1 text-xs hover:bg-zinc-700">Próximo ⏭</button>}
-              <button onClick={fullscreen} title="Tela cheia (f)">⛶</button>
+              {next && <button onClick={() => nav('/watch/' + next.id)} className="rounded bg-surface2/90 px-2 py-1 text-xs hover:bg-surface2">Próximo <SkipForward size={14} className="inline" /></button>}
+              <button onClick={fullscreen} title="Tela cheia (f)"><Maximize size={20} /></button>
             </span>
           </div>
         </div>

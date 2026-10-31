@@ -1,3 +1,66 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Tema "cinema": preto profundo com vermelho. Tema "anime": índigo com roxo e rosa. */
+:root,
+[data-theme='cinema'] {
+  --base: 9 9 11;
+  --surface: 22 22 26;
+  --surface2: 38 38 44;
+  --line: 52 52 60;
+  --accent: 229 9 20;
+  --accent-400: 248 85 94;
+  --accent-600: 200 8 18;
+  --accent-700: 150 6 14;
+  --glow: 244 63 94;
+  --font-display: 'Bebas Neue';
+}
+
+[data-theme='anime'] {
+  --base: 6 11 26;
+  --surface: 12 21 42;
+  --surface2: 21 33 64;
+  --line: 33 52 94;
+  --accent: 59 130 246;
+  --accent-400: 96 165 250;
+  --accent-600: 37 99 235;
+  --accent-700: 29 78 216;
+  --glow: 56 189 248;
+  --font-display: 'Outfit';
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  min-height: 100vh;
+  background-color: rgb(var(--base));
+  transition: background-color 0.5s ease;
+}
+
+[data-theme='anime'] body {
+  background-image:
+    radial-gradient(60rem 30rem at 85% -10%, rgb(56 189 248 / 0.10), transparent 60%),
+    radial-gradient(50rem 30rem at -10% 20%, rgb(37 99 235 / 0.14), transparent 60%);
+  background-attachment: fixed;
+}
+
+[data-theme='cinema'] body {
+  background-image: radial-gradient(60rem 28rem at 50% -12%, rgb(229 9 20 / 0.12), transparent 60%);
+  background-attachment: fixed;
+}
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgb(var(--line)); border-radius: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+::selection { background: rgb(var(--accent) / 0.4); }
+
+.glass {
+  background: rgb(var(--surface) / 0.65);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgb(var(--line) / 0.6);
+}

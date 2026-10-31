@@ -110,6 +110,22 @@ public class QbitClient {
         }
     }
 
+    /** Arquivos do torrent (vazio enquanto os metadados do magnet não chegaram). */
+    public List<Map<String, Object>> files(String hash) {
+        return call(r -> r.get().uri(Http.uri(base(), "/api/v2/torrents/files", "hash", hash)).retrieve().body(LIST));
+    }
+
+    /** priority 0 = não baixar; 1 = baixar. */
+    public void setFilePriority(String hash, List<Integer> indexes, int priority) {
+        if (indexes.isEmpty()) return;
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("hash", hash);
+        form.add("id", indexes.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining("|")));
+        form.add("priority", String.valueOf(priority));
+        call(r -> r.post().uri(Http.uri(base(), "/api/v2/torrents/filePrio"))
+            .contentType(MediaType.APPLICATION_FORM_URLENCODED).body(form).retrieve().toBodilessEntity());
+    }
+
     public void pause(String hash) { hashesAction("stop", "pause", hash); }
 
     public void resume(String hash) { hashesAction("start", "resume", hash); }

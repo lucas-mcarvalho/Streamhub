@@ -1,0 +1,1 @@
+ALTER TABLE download ADD COLUMN awaiting_selection BOOLEAN NOT NULL DEFAULT FALSE;

@@ -2,7 +2,9 @@ export type CatalogItem = {
   ref: string; source: string; type: string; id: string; kind: 'MOVIE' | 'SERIES' | 'ANIME'
   title: string; originalTitle?: string; overview?: string; posterUrl?: string; backdropUrl?: string
   year?: number; rating?: number; genres: string[]; episodes?: number; seasons?: number; status?: string; runtime?: number
+  format?: string; studio?: string
 }
+export type Genre = { id: string; name: string }
 export type Section = { key: string; title: string; items: CatalogItem[]; error?: string }
 export type Season = { number: number; name: string; episodeCount: number; airDate?: string }
 export type Episode = { number: number; name: string; overview?: string; airDate?: string; stillUrl?: string; runtime?: number }
@@ -10,6 +12,7 @@ export type Release = {
   guid: string; title: string; resolution: string; source?: string; codec?: string; sizeBytes: number
   seeders?: number; leechers?: number; indexer: string; indexerId: number; publishDate?: string
   magnetUrl?: string; downloadUrl?: string; infoUrl?: string; audioHints: string[]; subtitleHints: string[]
+  season?: number; seasonEnd?: number; episode?: number
 }
 export type Usage = { total: number; free: number; used: number }
 export type Location = {
@@ -24,7 +27,7 @@ export type Download = {
 }
 export type LibraryFile = {
   id: string; name: string; group: string; kind: string; sizeBytes: number; season?: number; episode?: number
-  location: string; relativePath: string
+  location: string; relativePath: string; modified: string
 }
 export type Indexer = { id: number; name: string; enabled: boolean; protocol: string; privacy: string; implementation: string; failing: boolean }
 export type Integration = {
@@ -79,7 +82,38 @@ export const fmtEta = (s?: number) => {
   return h ? `${h}h ${m}m` : m ? `${m}m ${s % 60}s` : `${s}s`
 }
 export const kindLabel: Record<string, string> = { MOVIE: 'Filme', SERIES: 'Série', ANIME: 'Anime', GENERAL: 'Geral' }
-export type TitleDetailsT = { item: CatalogItem; seasons: Season[] }
+export type Person = { name: string; role?: string; photoUrl?: string }
+export type TitleDetailsT = { item: CatalogItem; seasons: Season[]; directors: Person[]; cast: Person[] }
 export type AudioTrack = { index: number; codec?: string; language?: string; title?: string; channels: number }
 export type SubTrack = { index: number; codec?: string; language?: string; title?: string; textBased: boolean }
 export type MediaInfo = { duration: number; videoCodec?: string; directPlay: boolean; audio: AudioTrack[]; subtitles: SubTrack[] }
+
+const STATUS: Record<string, string> = {
+  FINISHED: 'Finalizado', RELEASING: 'Em exibição', NOT_YET_RELEASED: 'Em breve', CANCELLED: 'Cancelado', HIATUS: 'Em hiato',
+  'Returning Series': 'Em exibição', Ended: 'Finalizada', Released: 'Lançado', Canceled: 'Cancelada', 'In Production': 'Em produção',
+}
+export const statusPt = (s?: string) => (s ? STATUS[s] ?? s : undefined)
+
+const FORMAT: Record<string, string> = { TV: 'Série de TV', TV_SHORT: 'Curta', MOVIE: 'Filme', SPECIAL: 'Especial', OVA: 'OVA', ONA: 'ONA', MUSIC: 'Música' }
+export const formatPt = (f?: string) => (f ? FORMAT[f] ?? f : undefined)
+
+const GENRES: Record<string, string> = {
+  Action: 'Ação', Adventure: 'Aventura', Comedy: 'Comédia', Drama: 'Drama', Fantasy: 'Fantasia', Horror: 'Terror',
+  'Mahou Shoujo': 'Garota Mágica', Mecha: 'Mecha', Music: 'Música', Mystery: 'Mistério', Psychological: 'Psicológico',
+  Romance: 'Romance', 'Sci-Fi': 'Ficção Científica', 'Slice of Life': 'Cotidiano', Sports: 'Esportes',
+  Supernatural: 'Sobrenatural', Thriller: 'Suspense', Ecchi: 'Ecchi',
+}
+export const genrePt = (g: string) => GENRES[g] ?? g
+
+/** Progresso local de reprodução (guardado pelo player no navegador). */
+export const progressOf = (id: string) => {
+  try {
+    const pos = Number(localStorage.getItem('streamhub.pos.' + id)) || 0
+    const dur = Number(localStorage.getItem('streamhub.dur.' + id)) || 0
+    const last = Number(localStorage.getItem('streamhub.last.' + id)) || 0
+    const done = localStorage.getItem('streamhub.done.' + id) === '1'
+    return { pos, dur, last, done, ratio: dur > 0 ? Math.min(1, pos / dur) : 0 }
+  } catch { return { pos: 0, dur: 0, last: 0, done: false, ratio: 0 } }
+}
+
+export type DownloadFile = { index: number; name: string; size: number; progress: number; selected: boolean }

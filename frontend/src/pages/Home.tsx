@@ -1,46 +1,51 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, fmtEta, type Section } from '../api'
+import { motion } from 'framer-motion'
+import { Clapperboard, Swords } from 'lucide-react'
+import { api, type LibraryFile, type Section } from '../api'
+import ContinueRow from '../components/ContinueRow'
 import { useAsync } from '../hooks'
-import { Notice, Row, Spinner } from '../components/ui'
+import { useForceTheme } from '../theme'
 
-type Resume = { id: string; title: string; subtitle?: string; positionSeconds: number; durationSeconds: number; imageUrl: string; webUrl: string }
-
+/** Tela inicial: escolha entre o universo de Animes e o de Filmes & Séries. */
 export default function Home() {
-  const { data, loading, error } = useAsync(() => api<Section[]>('/catalog/home'), [])
-  const resume = useAsync(() => api<Resume[]>('/library/resume'), [])
-  const hero = data?.flatMap((s) => s.items).find((i) => i.backdropUrl)
-  if (loading) return <Spinner />
+  useForceTheme('cinema')
+  const { data } = useAsync(() => api<Section[]>('/catalog/home'), [])
+  const lib = useAsync(() => api<LibraryFile[]>('/library'), [])
+  const [hover, setHover] = useState<number | null>(null)
+  const movie = data?.find((s) => s.key === 'movies')?.items.find((i) => i.backdropUrl)
+  const anime = data?.find((s) => s.key === 'anime')?.items.find((i) => i.backdropUrl)
+  const panels = [
+    { to: '/cinema', title: 'Filmes & Séries', sub: 'Blockbusters, clássicos e as séries do momento', img: movie?.backdropUrl, icon: Clapperboard, tone: 'from-red-700/80', theme: 'cinema' },
+    { to: '/anime', title: 'Animes', sub: 'Notas, gêneros e temporadas direto do AniList', img: anime?.backdropUrl, icon: Swords, tone: 'from-blue-800/80', theme: 'anime' },
+  ]
   return (
     <div>
-      {hero && (
-        <Link to={`/title/${hero.source}/${hero.type}/${hero.id}`} className="relative mb-8 block h-72 overflow-hidden rounded-xl">
-          <img src={hero.backdropUrl} alt="" className="h-full w-full object-cover" />
-          <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/40 to-transparent" />
-          <div className="absolute bottom-4 left-6 max-w-xl">
-            <h1 className="text-3xl font-bold">{hero.title}</h1>
-            <p className="mt-1 line-clamp-2 text-sm text-zinc-300">{hero.overview}</p>
-          </div>
-        </Link>
-      )}
-      {error && <Notice text={error} />}
-      {data?.every((s) => s.error) && (
-        <Notice text="Catálogo indisponível. Configure a chave do TMDB em Configurações > Integrações (os animes usam o AniList e não exigem chave)." />
-      )}
-      {resume.data && resume.data.length > 0 && (
-        <section className="mb-8">
-          <h2 className="mb-3 text-xl font-semibold">Continuar assistindo (Jellyfin)</h2>
-          <div className="flex gap-4 overflow-x-auto">
-            {resume.data.map((r) => (
-              <a key={r.id} href={r.webUrl} target="_blank" rel="noreferrer" className="w-56 shrink-0">
-                <img src={r.imageUrl} alt="" className="aspect-video w-full rounded-lg bg-zinc-800 object-cover" />
-                <div className="mt-1 truncate text-sm">{r.title}</div>
-                <div className="text-xs text-zinc-400">{r.subtitle} · resta {fmtEta(Math.max(0, r.durationSeconds - r.positionSeconds))}</div>
-              </a>
-            ))}
-          </div>
-        </section>
-      )}
-      {data?.map((s) => <Row key={s.key} title={s.title} items={s.items} error={s.error} />)}
+      <motion.div className="mb-8 text-center" initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }}>
+        <h1 className="font-display text-5xl font-bold tracking-wider md:text-6xl">O que vamos assistir hoje?</h1>
+        <p className="mt-2 text-zinc-400">Escolha o seu universo</p>
+      </motion.div>
+      <div className="flex min-h-[420px] flex-col gap-4 md:h-[56vh] md:flex-row">
+        {panels.map((p, i) => (
+          <motion.div key={p.to} className="relative min-h-[220px] overflow-hidden rounded-3xl"
+            animate={{ flexGrow: hover === i ? 1.5 : 1 }} initial={{ opacity: 0, y: 30 }} whileInView={{ opacity: 1, y: 0 }}
+            transition={{ type: 'spring', damping: 24, stiffness: 160 }} style={{ flexBasis: 0, flexGrow: 1 }}
+            onHoverStart={() => setHover(i)} onHoverEnd={() => setHover(null)}>
+            <Link to={p.to} className="group block h-full" data-theme={p.theme}>
+              <motion.div className="absolute inset-0 bg-surface2 bg-cover bg-center" style={{ backgroundImage: p.img ? `url(${p.img})` : undefined }}
+                animate={{ scale: hover === i ? 1.08 : 1 }} transition={{ duration: 0.8 }} />
+              <div className={`absolute inset-0 bg-gradient-to-t ${p.tone} via-black/50 to-black/30 transition group-hover:via-black/30`} />
+              <div className="absolute bottom-8 left-8 right-8">
+                <p.icon size={36} className="mb-3 drop-shadow" />
+                <h2 className="font-display text-5xl font-bold tracking-wide">{p.title}</h2>
+                <p className="mt-2 max-w-md text-sm text-zinc-200">{p.sub}</p>
+                <span className="mt-5 inline-block rounded-full bg-white px-6 py-2 text-sm font-bold text-black transition group-hover:scale-105">Entrar →</span>
+              </div>
+            </Link>
+          </motion.div>
+        ))}
+      </div>
+      <div className="mt-10">{lib.data && <ContinueRow files={lib.data} />}</div>
     </div>
   )
 }

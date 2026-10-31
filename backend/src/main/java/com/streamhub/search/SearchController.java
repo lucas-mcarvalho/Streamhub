@@ -38,10 +38,12 @@ public class SearchController {
             if (magnet == null && dl == null) continue;
             String res = ReleaseParser.resolution(title);
             if (resolution != null && !resolution.isBlank() && !resolution.equalsIgnoreCase(res)) continue;
+            var se = ReleaseParser.season(title);
             out.add(new Release(J.str(r.get("guid")), title, res, ReleaseParser.source(title), ReleaseParser.codec(title),
                 J.lng(r.get("size")) == null ? 0 : J.lng(r.get("size")), J.integer(r.get("seeders")), J.integer(r.get("leechers")),
                 J.str(r.get("indexer")), J.lng(r.get("indexerId")), J.str(r.get("publishDate")), magnet, dl,
-                J.str(r.get("infoUrl")), ReleaseParser.audio(title), ReleaseParser.subs(title), false));
+                J.str(r.get("infoUrl")), ReleaseParser.audio(title), ReleaseParser.subs(title), false,
+                se.season(), se.seasonEnd(), se.episode()));
         }
         out.sort(Comparator.comparing((Release x) -> x.seeders() == null ? -1 : x.seeders()).reversed());
         return out;

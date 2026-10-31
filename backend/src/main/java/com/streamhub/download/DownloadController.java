@@ -29,6 +29,14 @@ public class DownloadController {
     @PostMapping
     public DownloadView start(@RequestBody DownloadService.StartRequest req) { return service.start(req); }
 
+    public record SelectRequest(List<Integer> selected) {}
+
+    @GetMapping("/{id}/files")
+    public List<DownloadService.FileEntry> files(@PathVariable long id) { return service.files(id); }
+
+    @PostMapping("/{id}/files")
+    public void selectFiles(@PathVariable long id, @RequestBody SelectRequest req) { service.selectFiles(id, req.selected()); }
+
     @PostMapping("/{id}/pause")
     public void pause(@PathVariable long id) { service.pause(id); }
 
