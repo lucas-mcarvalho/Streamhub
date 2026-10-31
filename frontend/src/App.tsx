@@ -13,6 +13,7 @@ import Library from './pages/Library'
 import ModeHome from './pages/ModeHome'
 import SearchPage from './pages/SearchPage'
 import Settings from './pages/Settings'
+import Channels from './pages/Channels'
 import Storage from './pages/Storage'
 import TitlePage from './pages/TitlePage'
 import Watch from './pages/Watch'
@@ -69,6 +70,7 @@ export default function App() {
               <Route path="library" element={<Navigate to="/cinema/library" replace />} />
               <Route path="search" element={<SearchPage />} />
               <Route path="title/:source/:type/:id" element={<TitlePage />} />
+              <Route path="tv" element={<Channels />} />
               <Route path="downloads" element={<Downloads />} />
               <Route path="storage" element={<Storage />} />
               <Route path="settings" element={<Settings />} />

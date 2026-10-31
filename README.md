@@ -44,6 +44,11 @@ Aplicação web para **pesquisar, baixar, organizar e assistir filmes, séries e
 - Raízes autorizadas, pastas registradas por tipo (filme, série, anime, geral) e pasta padrão por tipo.
 - Teste de gravação, aviso de pouco espaço e proteção contra *path traversal* e symlinks.
 
+**TV ao vivo** (recurso de teste)
+- Listas públicas de canais abertos do **iptv-org** (Brasil, português, infantil, animação, esportes, filmes e notícias) e suporte a **qualquer lista M3U** que você adicionar.
+- Player HLS no navegador, busca, filtro por grupo e favoritos. O StreamHub faz o proxy dos streams (resolve CORS e conteúdo misto), com URLs assinadas e bloqueio de endereços da rede local.
+- A disponibilidade dos canais varia: listas públicas mudam e falham com frequência.
+
 **Biblioteca e player próprio**
 - Grade de pôsteres com nota, gêneros e progresso por episódio; painel de detalhes por título; "Continuar assistindo".
 - Player com **troca de faixa de áudio**, **legendas** (PT-BR escolhida automaticamente quando existe), velocidade, tela cheia, atalhos de teclado e **próximo episódio**.
@@ -183,6 +188,8 @@ Autenticação HTTP Basic. Principais grupos de rotas:
 | `POST /api/downloads` · `GET /api/downloads/stream` | iniciar download · progresso (SSE) |
 | `GET/POST /api/downloads/{id}/files` | listar arquivos do torrent e escolher quais baixar |
 | `GET /api/library` · `POST /api/library/delete` | arquivos e exclusão |
+| `GET/POST /api/channels/sources` · `GET /api/channels?source=` | listas M3U e canais |
+| `GET /api/channels/proxy` | proxy HLS assinado (TV ao vivo) |
 | `GET /api/library/stream/{id}[/transcode\|/subtitle/{n}]` | reprodução com token assinado |
 
 ## Desenvolvimento

@@ -117,3 +117,6 @@ export const progressOf = (id: string) => {
 }
 
 export type DownloadFile = { index: number; name: string; size: number; progress: number; selected: boolean }
+
+export type ChannelSource = { id: number; name: string; url: string; builtin: boolean }
+export type Channel = { id: number; name: string; logo?: string; group: string; hls: boolean; playUrl: string }

@@ -27,7 +27,7 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .cors(Customizer.withDefaults())
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/actuator/health", "/api/system/status", "/api/library/stream/**").permitAll()
+                .requestMatchers("/actuator/health", "/api/system/status", "/api/library/stream/**", "/api/channels/play/**", "/api/channels/r/*").permitAll()
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 .anyRequest().authenticated())
             .httpBasic(Customizer.withDefaults());

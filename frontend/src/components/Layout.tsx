@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Clapperboard, Compass, Download, Film, HardDrive, Home, Library, LogOut, type LucideIcon, Search, Settings, Swords, Tv } from 'lucide-react'
+import { Clapperboard, Compass, Download, Film, HardDrive, Home, Library, LogOut, type LucideIcon, Radio, Search, Settings, Swords, Tv } from 'lucide-react'
 import { auth } from '../api'
 import { useTheme } from '../theme'
 
@@ -19,6 +19,7 @@ const animeNav: Item[] = [
   { to: '/anime/library', label: 'Minha biblioteca', icon: Library },
 ]
 const common: Item[] = [
+  { to: '/tv', label: 'TV ao vivo', icon: Radio },
   { to: '/downloads', label: 'Downloads', icon: Download },
   { to: '/storage', label: 'Armazenamento', icon: HardDrive },
   { to: '/settings', label: 'Configurações', icon: Settings },
