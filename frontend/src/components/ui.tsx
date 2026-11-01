@@ -52,11 +52,12 @@ export function Chip({ children, to }: { children: ReactNode; to?: string }) {
   return to ? <Link to={to} className={cls + ' hover:bg-accent-500/25'}>{children}</Link> : <span className={cls}>{children}</span>
 }
 
-export function Card({ item, index = 0, fluid }: { item: CatalogItem; index?: number; fluid?: boolean }) {
+export function Card({ item, index = 0, fluid, wide }: { item: CatalogItem; index?: number; fluid?: boolean; wide?: boolean }) {
   const anime = item.kind === 'ANIME'
   const genres = (anime ? item.genres.map(genrePt) : item.genres).slice(0, 3)
+  const size = fluid ? 'w-full' : wide ? 'w-44 shrink-0 sm:w-52' : 'w-40 shrink-0 sm:w-44'
   return (
-    <motion.div className={`group ${fluid ? 'w-full' : 'w-40 shrink-0 sm:w-44'}`}
+    <motion.div className={`group ${size}`}
       initial={{ opacity: 0, y: 24 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '40px' }}
       transition={{ delay: Math.min(index % 12, 10) * 0.04, duration: 0.45 }} whileHover={{ y: -8 }}>
       <Link to={`/title/${item.source}/${item.type}/${item.id}`} className="block">
@@ -65,13 +66,28 @@ export function Card({ item, index = 0, fluid }: { item: CatalogItem; index?: nu
             ? <img src={item.posterUrl} alt={item.title} loading="lazy" className="h-full w-full object-cover transition duration-500 group-hover:scale-110" />
             : <div className="flex h-full items-center justify-center p-3 text-center text-xs text-zinc-500">{item.title}</div>}
           <div className="absolute left-2 top-2"><Score value={item.rating} /></div>
-          <div className="absolute inset-0 flex flex-col justify-end gap-2 bg-gradient-to-t from-black/95 via-black/50 to-transparent p-3 opacity-0 transition duration-300 group-hover:opacity-100">
-            <div className="flex flex-wrap gap-1">{genres.map((g) => <span key={g} className="rounded-full bg-accent-500/80 px-2 py-0.5 text-[10px] font-semibold text-white">{g}</span>)}</div>
-            <p className="line-clamp-3 text-[11px] leading-snug text-zinc-200">{item.overview || 'Sem sinopse.'}</p>
-          </div>
+          {anime ? (
+            <div className="absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/25 to-transparent p-3">
+              <div className="max-h-0 overflow-hidden opacity-0 transition-all duration-300 group-hover:mb-2 group-hover:max-h-40 group-hover:opacity-100">
+                <div className="mb-1.5 flex flex-wrap gap-1">{genres.map((g) => <span key={g} className="rounded-full bg-accent-500 px-2 py-0.5 text-[10px] font-bold text-white">{g}</span>)}</div>
+                <p className="line-clamp-4 text-[11px] leading-snug text-zinc-200">{item.overview || 'Sem sinopse.'}</p>
+              </div>
+              <div className="line-clamp-2 text-sm font-bold leading-tight">{item.title}</div>
+              <div className="mt-0.5 text-[11px] text-zinc-400">{item.year ?? '—'}{item.episodes ? ` · ${item.episodes} eps` : ''}</div>
+            </div>
+          ) : (
+            <div className="absolute inset-0 flex flex-col justify-end gap-2 bg-gradient-to-t from-black/95 via-black/50 to-transparent p-3 opacity-0 transition duration-300 group-hover:opacity-100">
+              <div className="flex flex-wrap gap-1">{genres.map((g) => <span key={g} className="rounded-full bg-accent-500/80 px-2 py-0.5 text-[10px] font-semibold text-white">{g}</span>)}</div>
+              <p className="line-clamp-3 text-[11px] leading-snug text-zinc-200">{item.overview || 'Sem sinopse.'}</p>
+            </div>
+          )}
         </div>
-        <div className="mt-2.5 truncate text-sm font-semibold transition group-hover:text-accent-400">{item.title}</div>
-        <div className="truncate text-xs text-zinc-400">{item.year ?? '—'}{item.episodes ? ` · ${item.episodes} eps` : ''}{genres[0] ? ` · ${genres[0]}` : ''}</div>
+        {!anime && (
+          <>
+            <div className="mt-2.5 truncate text-sm font-semibold transition group-hover:text-accent-400">{item.title}</div>
+            <div className="truncate text-xs text-zinc-400">{item.year ?? '—'}{item.episodes ? ` · ${item.episodes} eps` : ''}{genres[0] ? ` · ${genres[0]}` : ''}</div>
+          </>
+        )}
       </Link>
     </motion.div>
   )

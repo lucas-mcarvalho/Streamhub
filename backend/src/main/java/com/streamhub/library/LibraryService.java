@@ -30,7 +30,7 @@ import com.streamhub.storage.StorageService;
 @Service
 public class LibraryService {
     private static final Set<String> VIDEO = Set.of("mkv", "mp4", "m4v", "avi", "mov", "webm", "ts", "wmv");
-    private static final Pattern SXXEYY = Pattern.compile("[Ss](\\d{1,2})[Ee](\\d{1,3})|(\\d{1,2})x(\\d{2,3})");
+    private static final Pattern SXXEYY = Pattern.compile("[Ss](\\d{1,2})[Ee](\\d{1,4})|(\\d{1,2})x(\\d{2,4})");
 
     public record Track(String type, String codec, String language, String title) {}
 
@@ -275,6 +275,51 @@ public class LibraryService {
             }
         }
         return deleted;
+    }
+
+    // ---------- miniatura do ponto em que o usuário parou ----------
+
+    private final java.util.Map<String, byte[]> thumbCache = java.util.Collections.synchronizedMap(
+        new java.util.LinkedHashMap<>(64, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(java.util.Map.Entry<String, byte[]> eldest) { return size() > 400; }
+        });
+    private final java.util.concurrent.Semaphore thumbSlots = new java.util.concurrent.Semaphore(3);
+
+    /** Quadro JPEG do vídeo na posição indicada (arredondada a 5 s para aproveitar o cache). */
+    public byte[] thumbnail(String id, double seconds, int width) {
+        Path p = resolve(id);
+        int w = Math.max(160, Math.min(width, 960));
+        long at = Math.max(0, Math.round(seconds / 5.0) * 5);
+        String key = id + "|" + at + "|" + w;
+        byte[] cached = thumbCache.get(key);
+        if (cached != null) return cached;
+        try {
+            thumbSlots.acquire();
+            try {
+                byte[] img = frame(p, at, w);
+                if (img.length == 0 && at > 0) img = frame(p, 0, w); // posição além do fim: usa o início
+                if (img.length == 0) throw new ApiException(HttpStatus.NOT_FOUND, "NO_FRAME", "Não foi possível gerar a miniatura");
+                thumbCache.put(key, img);
+                return img;
+            } finally {
+                thumbSlots.release();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "INTERRUPTED", "Interrompido");
+        } catch (IOException e) {
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "NO_FFMPEG", "ffmpeg não está disponível no servidor");
+        }
+    }
+
+    private byte[] frame(Path p, long at, int width) throws IOException, InterruptedException {
+        Process pr = new ProcessBuilder("ffmpeg", "-v", "error", "-nostdin", "-ss", String.valueOf(at), "-i", p.toString(),
+            "-frames:v", "1", "-vf", "scale=" + width + ":-2", "-q:v", "4", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1")
+            .redirectError(ProcessBuilder.Redirect.DISCARD).start();
+        byte[] out = pr.getInputStream().readAllBytes();
+        if (!pr.waitFor(20, TimeUnit.SECONDS)) pr.destroyForcibly();
+        return out;
     }
 
     // ---------- token de streaming (a tag <video> não envia cabeçalho Authorization) ----------

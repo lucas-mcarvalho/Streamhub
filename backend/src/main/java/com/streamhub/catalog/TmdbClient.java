@@ -128,6 +128,38 @@ public class TmdbClient {
             movie ? "primary_release_date.lte" : "first_air_date.lte", "NEW".equals(sort) ? today : null), type);
     }
 
+    private static String norm(String s) { return s == null ? "" : s.toLowerCase().replaceAll("[^\\p{L}\\p{N}]", ""); }
+
+    private static boolean similar(String query, String... names) {
+        String q = norm(query);
+        if (q.length() < 3) return false;
+        for (String n : names) {
+            String x = norm(n);
+            if (x.length() < 3) continue;
+            if (x.equals(q) || (x.length() >= 5 && q.contains(x)) || (q.length() >= 5 && x.contains(q))) return true;
+        }
+        return false;
+    }
+
+    /** Sinopse em português (pt-BR) de um título correspondente; vazio se o TMDB não tiver tradução. */
+    public java.util.Optional<String> overviewPt(String type, String query, Integer year) {
+        boolean movie = type.equals("movie");
+        for (boolean withYear : new boolean[] {true, false}) {
+            if (withYear && year == null) continue;
+            Map<String, Object> res = withYear
+                ? get("/search/" + type, "query", query, movie ? "year" : "first_air_date_year", year)
+                : get("/search/" + type, "query", query);
+            for (Map<String, Object> m : J.maps(res.get("results"))) {
+                String ov = J.str(m.get("overview"));
+                if (ov == null || ov.isBlank()) continue;
+                if (similar(query, J.str(m.get(movie ? "title" : "name")), J.str(m.get(movie ? "original_title" : "original_name")))) {
+                    return java.util.Optional.of(ov.trim());
+                }
+            }
+        }
+        return java.util.Optional.empty();
+    }
+
     public CatalogItem details(String type, String id) { return map(get("/" + type + "/" + id), type); }
 
     private static Person person(Map<String, Object> m, String role) {

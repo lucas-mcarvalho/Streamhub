@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Tema "cinema": preto profundo com vermelho. Tema "anime": índigo com roxo e rosa. */
+/* Tema "cinema": preto profundo com vermelho. Tema "anime": grafite azulado com azul. */
 :root,
 [data-theme='cinema'] {
   --base: 9 9 11;
@@ -15,19 +15,21 @@
   --accent-700: 150 6 14;
   --glow: 244 63 94;
   --font-display: 'Bebas Neue';
+  --font-sans: 'Inter';
 }
 
 [data-theme='anime'] {
-  --base: 6 11 26;
-  --surface: 12 21 42;
-  --surface2: 21 33 64;
-  --line: 33 52 94;
+  --base: 17 20 30;
+  --surface: 25 29 42;
+  --surface2: 36 41 58;
+  --line: 52 59 80;
   --accent: 59 130 246;
-  --accent-400: 96 165 250;
+  --accent-400: 125 176 252;
   --accent-600: 37 99 235;
   --accent-700: 29 78 216;
   --glow: 56 189 248;
-  --font-display: 'Outfit';
+  --font-display: 'Plus Jakarta Sans';
+  --font-sans: 'Plus Jakarta Sans';
 }
 
 html { scroll-behavior: smooth; }
@@ -39,10 +41,8 @@ body {
 }
 
 [data-theme='anime'] body {
-  background-image:
-    radial-gradient(60rem 30rem at 85% -10%, rgb(56 189 248 / 0.10), transparent 60%),
-    radial-gradient(50rem 30rem at -10% 20%, rgb(37 99 235 / 0.14), transparent 60%);
-  background-attachment: fixed;
+  background-image: none;
+  font-family: 'Plus Jakarta Sans', Inter, system-ui, sans-serif;
 }
 
 [data-theme='cinema'] body {

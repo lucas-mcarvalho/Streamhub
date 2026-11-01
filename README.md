@@ -23,7 +23,7 @@ Aplicação web para **pesquisar, baixar, organizar e assistir filmes, séries e
 ## Recursos
 
 **Catálogo**
-- Dois visuais próprios: **Filmes & Séries** (preto e vermelho, barra superior) e **Animes** (azul-marinho, menu lateral). Um botão alterna entre eles.
+- Dois visuais próprios: **Filmes & Séries** (preto e vermelho, barra superior) e **Animes** (grafite com azul, menu em pílula e banner em tela cheia). Um botão alterna entre eles.
 - Filmes e séries pelo **TMDB**; animes pelo **AniList**.
 - Capas, sinopse, **nota**, **gêneros**, ano, formato, estúdio, temporadas e episódios.
 - Filmes e séries mostram **diretores (ou criadores) e elenco principal** com foto.
@@ -137,6 +137,8 @@ Todas as variáveis ficam no arquivo `.env` (modelo em `.env.example`).
 | `JELLYFIN_API_KEY` | vazio | chave criada no painel do Jellyfin |
 | `JELLYFIN_PUBLIC_URL` | `http://localhost:8096` | endereço do Jellyfin visto pelo navegador |
 | `ARR_IMPORT_ON_COMPLETE` | `false` | se `true`, Sonarr/Radarr importam (copiando) ao concluir |
+
+O tamanho máximo das listas de canais (M3U) é ajustável em **Configurações > TV ao vivo** (1 a 200 MB; padrão 48 MB) e vale na hora, sem reiniciar. Listas maiores usam mais memória.
 
 Variáveis avançadas do backend: `STORAGE_ALLOWED_ROOTS` (padrão `/media`), `STORAGE_MIN_FREE_GB` (aviso de pouco espaço) e `QBIT_PATH_MAP` (`/prefixo_backend=/prefixo_qbit`).
 

@@ -21,6 +21,7 @@ public class CatalogService {
 
     private final TmdbClient tmdb;
     private final AniListClient anilist;
+    private final OverviewLocalizer localizer;
     private record Entry(Object value, long expires) {}
 
     private final ConcurrentHashMap<String, Entry> cache = new ConcurrentHashMap<>();
@@ -37,9 +38,10 @@ public class CatalogService {
 
     private final ConcurrentHashMap<String, Optional<CatalogItem>> matchCache = new ConcurrentHashMap<>();
 
-    public CatalogService(TmdbClient tmdb, AniListClient anilist) {
+    public CatalogService(TmdbClient tmdb, AniListClient anilist, OverviewLocalizer localizer) {
         this.tmdb = tmdb;
         this.anilist = anilist;
+        this.localizer = localizer;
     }
 
     private Section section(String key, String title, Supplier<List<CatalogItem>> s) {
@@ -48,7 +50,7 @@ public class CatalogService {
 
     private Section section(String cacheKey, String key, String title, Supplier<List<CatalogItem>> s) {
         try {
-            return new Section(key, title, cached(cacheKey, 600, s), null);
+            return new Section(key, title, cached(cacheKey, 600, () -> localizer.localize(s.get(), 8)), null);
         } catch (Exception e) {
             return new Section(key, title, List.of(), e.getMessage());
         }
@@ -84,7 +86,7 @@ public class CatalogService {
     }
 
     public List<CatalogItem> discover(String kind, String q, String sort, String genre, int page) {
-        return cached("discover:" + kind + "|" + q + "|" + sort + "|" + genre + "|" + page, 600, () -> doDiscover(kind, q, sort, genre, page));
+        return cached("discover:" + kind + "|" + q + "|" + sort + "|" + genre + "|" + page, 600, () -> localizer.localize(doDiscover(kind, q, sort, genre, page), 8));
     }
 
     private List<CatalogItem> doDiscover(String kind, String q, String sort, String genre, int page) {
@@ -116,7 +118,7 @@ public class CatalogService {
     }
 
     private TitleDetails doDetails(String source, String type, String id) {
-        if (source.equals("anilist")) return new TitleDetails(anilist.details(id), List.of(), List.of(), List.of());
+        if (source.equals("anilist")) return new TitleDetails(localizer.localize(anilist.details(id)), List.of(), List.of(), List.of());
         CatalogItem item = tmdb.details(type, id);
         List<Person> directors = List.of(), cast = List.of();
         try {
@@ -160,6 +162,7 @@ public class CatalogService {
         }
         if (best.isEmpty()) best = candidates.stream().filter(c -> titleMatches(c, norm)).findFirst();
         if (best.isEmpty()) best = candidates.stream().findFirst();
+        best = best.map(localizer::localize);
         if (anyOk) matchCache.put(key, best);
         return best;
     }
