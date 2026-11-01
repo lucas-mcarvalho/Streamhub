@@ -73,14 +73,21 @@ public class DownloadService {
     }
 
     private String validateSource(StartRequest r) {
-        if (r.magnetUrl() != null && r.magnetUrl().startsWith("magnet:?")) return r.magnetUrl();
-        String url = r.downloadUrl();
-        if (url != null && (url.startsWith("http://") || url.startsWith("https://"))) {
-            // somente URLs servidas pelo próprio Prowlarr, para evitar que o qBittorrent seja usado como proxy (SSRF)
-            if (url.startsWith(prowlarr.baseUrl().replaceAll("/+$", "") + "/")) return url;
-            throw new ApiException(HttpStatus.BAD_REQUEST, "BAD_SOURCE", "URL de download não pertence ao Prowlarr configurado");
+        // 1) magnet de verdade
+        for (String u : new String[] {r.magnetUrl(), r.downloadUrl()}) {
+            if (u != null && u.startsWith("magnet:?")) return u;
         }
-        throw new ApiException(HttpStatus.BAD_REQUEST, "BAD_SOURCE", "Informe um magnet ou uma URL de download");
+        // 2) link servido pelo próprio Prowlarr. Alguns indexadores (ex.: Nyaa.si) devolvem esse link no campo "magnet".
+        // Só endereços do Prowlarr configurado são aceitos, para o qBittorrent não virar um proxy (SSRF).
+        String base = prowlarr.baseUrl().replaceAll("/+$", "") + "/";
+        boolean sawHttp = false;
+        for (String u : new String[] {r.downloadUrl(), r.magnetUrl()}) {
+            if (u == null || !(u.startsWith("http://") || u.startsWith("https://"))) continue;
+            sawHttp = true;
+            if (u.startsWith(base)) return u;
+        }
+        if (sawHttp) throw new ApiException(HttpStatus.BAD_REQUEST, "BAD_SOURCE", "URL de download não pertence ao Prowlarr configurado");
+        throw new ApiException(HttpStatus.BAD_REQUEST, "BAD_SOURCE", "Este resultado não tem magnet nem link de download");
     }
 
     public DownloadView start(StartRequest r) {
