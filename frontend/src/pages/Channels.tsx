@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import Hls from 'hls.js'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Heart, Plus, Radio, Search, Trash2, Tv } from 'lucide-react'
+import LivePlayer from '../components/LivePlayer'
 import { api, GENRE_ORDER, type Channel, type ChannelSource } from '../api'
 import { useToast } from '../components/Toast'
 import { btn, btnGhost, input, Modal, Notice, PageTitle, Spinner } from '../components/ui'
@@ -55,9 +55,7 @@ export default function Channels() {
   const [favs, setFavs] = useState<Set<string>>(loadFavs)
   const [limit, setLimit] = useState(PAGE)
   const [current, setCurrent] = useState<Channel | null>(null)
-  const [playErr, setPlayErr] = useState<string>()
   const [adding, setAdding] = useState(false)
-  const video = useRef<HTMLVideoElement>(null)
   const playerBox = useRef<HTMLDivElement>(null)
 
   useEffect(() => { if (sourceId == null && sources.data?.length) setSourceId(sources.data[0].id) }, [sources.data, sourceId])
@@ -72,39 +70,6 @@ export default function Channels() {
     try { localStorage.setItem(FAV_KEY, JSON.stringify([...n])) } catch { /* sem armazenamento */ }
     return n
   })
-
-  // reprodução: HLS pelo hls.js; filmes e séries (MP4) direto na tag de vídeo
-  useEffect(() => {
-    const v = video.current
-    if (!v || !current) return
-    setPlayErr(undefined)
-    let hls: Hls | undefined
-    if (current.direct && !current.hls) {
-      v.src = current.playUrl
-      v.onerror = () => setPlayErr('Não foi possível abrir este vídeo. O arquivo pode ter saído do ar ou usar um formato que o navegador não toca.')
-      v.play().catch(() => {})
-    } else if (Hls.isSupported()) {
-      hls = new Hls({ maxBufferLength: 20, enableWorker: true })
-      hls.loadSource(current.playUrl)
-      hls.attachMedia(v)
-      hls.on(Hls.Events.MANIFEST_PARSED, () => { v.play().catch(() => {}) })
-      let netRetries = 0, mediaRetries = 0
-      hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (!data.fatal) return
-        // tenta se recuperar antes de avisar (trocas de anúncio e quedas de rede são comuns em TV ao vivo)
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && netRetries < 3) { netRetries++; hls?.startLoad(); return }
-        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRetries < 2) { mediaRetries++; hls?.recoverMediaError(); return }
-        if (v.currentTime > 0 && !v.paused && !v.ended && v.readyState > 2) return // continua tocando
-        setPlayErr('Este canal está indisponível no momento. Listas públicas mudam e falham com frequência; tente outro.')
-      })
-    } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
-      v.src = current.playUrl
-      v.play().catch(() => {})
-    } else {
-      setPlayErr('Este navegador não suporta reprodução de TV ao vivo (HLS).')
-    }
-    return () => { hls?.destroy(); v.onerror = null; v.removeAttribute('src'); v.load() }
-  }, [current])
 
   const all = sources.data ?? []
   const numbered = all.filter((x) => x.position < 100)
@@ -128,6 +93,12 @@ export default function Channels() {
     setCurrent(c)
     playerBox.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
+  // zapping: canal anterior/próximo dentro da lista filtrada
+  const step = (d: number) => {
+    if (!filtered.length) return
+    const i = filtered.findIndex((c) => c.id === current?.id)
+    setCurrent(filtered[(i + d + filtered.length) % filtered.length])
+  }
   const removeSource = async (s: ChannelSource) => {
     if (!confirm(`Remover a lista "${s.name}"?`)) return
     try { await api(`/channels/sources/${s.id}`, { method: 'DELETE' }); if (sourceId === s.id) setSourceId(null); sources.reload() }
@@ -138,19 +109,16 @@ export default function Channels() {
     <div>
       <PageTitle sub="Escolha uma fonte e filtre por gênero. Recurso de teste: a disponibilidade dos canais varia.">TV ao vivo</PageTitle>
 
-      <div ref={playerBox} className="mb-8 scroll-mt-24">
+      <div ref={playerBox} className="sticky top-0 z-40 -mx-4 mb-6 bg-canvas sm:bg-transparent scroll-mt-24 sm:static sm:mx-0 sm:mb-8">
         <AnimatePresence>
           {current && (
             <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
-              <div className="relative mx-auto aspect-video w-full max-w-5xl overflow-hidden rounded-2xl bg-black shadow-2xl">
-                <video ref={video} controls autoPlay playsInline className="h-full w-full" onPlaying={() => setPlayErr(undefined)} />
-                {!current.direct && <span className="pointer-events-none absolute left-4 top-4 flex items-center gap-1.5 rounded-full bg-red-600 px-3 py-1 text-xs font-bold"><span className="h-2 w-2 animate-pulse rounded-full bg-white" />AO VIVO</span>}
+              <LivePlayer channel={current} favorite={favs.has(key(current))} onFavorite={() => toggleFav(current)}
+                onPrev={filtered.length > 1 ? () => step(-1) : undefined} onNext={filtered.length > 1 ? () => step(1) : undefined} />
+              <div className="mx-auto mt-2 max-w-5xl px-4 sm:mt-3 sm:px-0">
+                <div className="truncate font-display text-lg font-semibold sm:text-2xl">{current.name}</div>
+                <div className="text-xs text-zinc-400">{current.group}</div>
               </div>
-              <div className="mx-auto mt-3 flex max-w-5xl items-center justify-between gap-3">
-                <div className="min-w-0"><div className="truncate font-display text-2xl font-semibold">{current.name}</div><div className="text-xs text-zinc-400">{current.group}</div></div>
-                <button className={btnGhost} onClick={() => toggleFav(current)}><Heart size={16} className={favs.has(key(current)) ? 'fill-accent-500 text-accent-500' : ''} />Favorito</button>
-              </div>
-              {playErr && <div className="mx-auto mt-3 max-w-5xl"><Notice text={playErr} /></div>}
             </motion.div>
           )}
         </AnimatePresence>
@@ -196,7 +164,7 @@ export default function Channels() {
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar canal…"
             className="w-full rounded-full border border-line bg-surface/70 py-2 pl-9 pr-4 text-sm outline-none transition focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20" />
         </div>
-        <select className={input + ' !w-auto'} value={group} onChange={(e) => setGroup(e.target.value)}>
+        <select className={input + ' sm:!w-auto'} value={group} onChange={(e) => setGroup(e.target.value)}>
           <option value="">Todos os países/grupos</option>
           {groups.map((g) => <option key={g} value={g}>{g}</option>)}
         </select>
@@ -219,7 +187,7 @@ export default function Channels() {
                   <div className="flex items-center gap-1 truncate text-[11px] text-zinc-400"><Radio size={10} />{c.group}</div>
                 </div>
                 <button onClick={(e) => { e.stopPropagation(); toggleFav(c) }} title="Favorito"
-                  className="absolute right-2 top-2 rounded-full bg-black/60 p-1.5 opacity-0 backdrop-blur transition group-hover:opacity-100">
+                  className="absolute right-2 top-2 rounded-full bg-black/60 p-1.5 backdrop-blur transition md:opacity-0 md:group-hover:opacity-100">
                   <Heart size={14} className={favs.has(key(c)) ? 'fill-accent-500 text-accent-500' : ''} />
                 </button>
               </motion.div>

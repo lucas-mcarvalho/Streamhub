@@ -64,3 +64,8 @@ body {
   backdrop-filter: blur(14px);
   border: 1px solid rgb(var(--line) / 0.6);
 }
+
+/* barra de posição do player: área de toque maior em telas de toque */
+@media (pointer: coarse) {
+  input[type='range'].seek { height: 28px; }
+}

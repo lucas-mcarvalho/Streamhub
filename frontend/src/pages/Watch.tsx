@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Maximize, Pause, Play, RotateCcw, RotateCw, SkipForward, Volume2, VolumeX } from 'lucide-react'
+import { ArrowLeft, Check, Loader2, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SkipForward, Volume2, VolumeX } from 'lucide-react'
 import { api, type AudioTrack, type LibraryFile, type MediaInfo, type SubTrack } from '../api'
 import { Notice } from '../components/ui'
 
@@ -14,6 +14,21 @@ const langName = (l?: string) => (l ? LANGS[l] ?? l : 'Idioma não marcado')
 const audioLabel = (a: AudioTrack) => `${langName(a.language)}${a.title ? ' — ' + a.title : ''} (${a.codec}${a.channels > 2 ? ' ' + a.channels + 'ch' : ''})`
 const subLabel = (s: SubTrack) =>
   `${langName(s.language)}${s.language === 'por' && /brazil/i.test(s.title ?? '') ? ' (PT-BR)' : ''}${s.title ? ' — ' + s.title : ''}${s.textBased ? '' : ' [imagem, indisponível]'}`
+
+const ctl = 'grid h-10 w-10 shrink-0 place-items-center rounded-full text-white transition hover:bg-white/15 active:bg-white/25'
+
+function MenuGroup({ items, onPick }: { items: { key: number; label: string; on: boolean; disabled?: boolean }[]; onPick: (k: number) => void }) {
+  return (
+    <div>
+      {items.map((i) => (
+        <button key={i.key} disabled={i.disabled} onClick={() => onPick(i.key)}
+          className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition hover:bg-white/10 disabled:opacity-40 ${i.on ? 'font-semibold text-accent-500' : 'text-zinc-200'}`}>
+          <span className="min-w-0 flex-1 break-words">{i.label}</span>{i.on && <Check size={16} className="shrink-0" />}
+        </button>
+      ))}
+    </div>
+  )
+}
 
 function fmt(t: number) {
   if (!isFinite(t) || t < 0) t = 0
@@ -38,6 +53,8 @@ function parseVtt(text: string): Cue[] {
   }
   return cues
 }
+
+const coarse = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
 
 export default function Watch() {
   const { id = '' } = useParams()
@@ -64,6 +81,16 @@ export default function Watch() {
   const [rate, setRate] = useState(1)
   const [showUi, setShowUi] = useState(true)
   const [files, setFiles] = useState<LibraryFile[]>([])
+  const [menu, setMenu] = useState(false)
+  const [tab, setTab] = useState<'audio' | 'sub' | 'rate'>('sub')
+  const [fs, setFs] = useState(false)
+  const [fake, setFake] = useState(false)
+  const [flash, setFlash] = useState<{ side: number; n: number }>()
+  const menuOpen = useRef(false)
+  const tapTimer = useRef<number>()
+  const lastTap = useRef(0)
+  const touch = coarse()
+  menuOpen.current = menu
 
   const abs = mode === 'transcode' ? offset + cur : cur
   const duration = info?.duration || video.current?.duration || 0
@@ -136,10 +163,33 @@ export default function Watch() {
     setWaiting(true)
   }
 
+  // tela cheia real quando existe; senão (iPhone) o player ocupa a tela por CSS
   const fullscreen = useCallback(() => {
-    if (document.fullscreenElement) document.exitFullscreen()
-    else box.current?.requestFullscreen()
+    const el = box.current
+    if (!el) return
+    if (document.fullscreenElement) { document.exitFullscreen(); return }
+    if (fake) { setFake(false); return }
+    if (el.requestFullscreen) el.requestFullscreen().catch(() => setFake(true))
+    else setFake(true)
+  }, [fake])
+
+  useEffect(() => {
+    const h = () => {
+      const on = document.fullscreenElement === box.current
+      setFs(on)
+      try {
+        const o = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }
+        if (on && coarse()) o.lock?.('landscape').catch(() => {}); else if (!on) o.unlock?.()
+      } catch { /* orientação não suportada */ }
+    }
+    document.addEventListener('fullscreenchange', h)
+    return () => document.removeEventListener('fullscreenchange', h)
   }, [])
+  useEffect(() => {
+    if (!fake) return
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = '' }
+  }, [fake])
 
   // atalhos de teclado
   useEffect(() => {
@@ -150,10 +200,11 @@ export default function Watch() {
       else if (e.key === 'ArrowLeft') seek(abs - 10)
       else if (e.key === 'f') fullscreen()
       else if (e.key === 'm') setMuted((m) => !m)
+      else if (e.key === 'Escape' && fake) setFake(false)
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
-  }, [toggle, seek, fullscreen, abs])
+  }, [toggle, seek, fullscreen, abs, fake])
 
   useEffect(() => { if (video.current) { video.current.volume = volume; video.current.muted = muted } }, [volume, muted, src])
   useEffect(() => { if (video.current) video.current.playbackRate = rate }, [rate, src])
@@ -161,11 +212,40 @@ export default function Watch() {
   const poke = () => {
     setShowUi(true)
     window.clearTimeout(hideTimer.current)
-    hideTimer.current = window.setTimeout(() => setShowUi(false), 3000)
+    hideTimer.current = window.setTimeout(() => { if (!menuOpen.current) setShowUi(false) }, 3000)
+  }
+
+  // toque: 1 toque mostra/esconde os controles, 2 toques nas laterais pulam 10 s, 2 toques no centro pausam
+  const onTap = (e: React.MouseEvent<HTMLElement>) => {
+    if (menu) { setMenu(false); return }
+    if (!touch) { toggle(); return }
+    const r = e.currentTarget.getBoundingClientRect()
+    const x = (e.clientX - r.left) / r.width
+    const now = Date.now()
+    if (now - lastTap.current < 300) {
+      window.clearTimeout(tapTimer.current)
+      lastTap.current = 0
+      if (x < 0.35) { seek(abs - 10); setFlash({ side: -1, n: now }) }
+      else if (x > 0.65) { seek(abs + 10); setFlash({ side: 1, n: now }) }
+      else toggle()
+      window.setTimeout(() => setFlash((f) => (f?.n === now ? undefined : f)), 600)
+      return
+    }
+    lastTap.current = now
+    tapTimer.current = window.setTimeout(() => {
+      if (showUi && playing) { window.clearTimeout(hideTimer.current); setShowUi(false) } else poke()
+    }, 300)
   }
 
   const cue = cues.find((c) => abs >= c.start && abs < c.end)
   const uiVisible = showUi || !playing
+  const expanded = fs || fake
+  const tabs = [
+    ...(info && info.audio.length > 1 ? [{ id: 'audio' as const, label: 'Áudio' }] : []),
+    ...(info && info.subtitles.length > 0 ? [{ id: 'sub' as const, label: 'Legenda' }] : []),
+    { id: 'rate' as const, label: 'Velocidade' },
+  ]
+  const activeTab = tabs.some((t) => t.id === tab) ? tab : tabs[0].id
 
   if (err && !info) return <Notice text={err} />
   return (
@@ -174,10 +254,10 @@ export default function Watch() {
         <Link to="/library" className="flex items-center gap-1 text-zinc-400 hover:text-white"><ArrowLeft size={16} />Biblioteca</Link>
         <span className="truncate pl-4 text-zinc-300">{file?.group} {file?.season != null ? `· T${file.season} E${file.episode}` : ''}</span>
       </div>
-      <div ref={box} onMouseMove={poke} onMouseLeave={() => playing && setShowUi(false)}
-        className={`relative mx-auto aspect-video w-full overflow-hidden rounded-lg bg-black ${uiVisible ? '' : 'cursor-none'}`}>
+      <div ref={box} onPointerMove={(e) => { if (e.pointerType === 'mouse') poke() }} onMouseLeave={() => !touch && playing && !menu && setShowUi(false)}
+        className={`overflow-hidden bg-black ${fake ? 'fixed inset-0 z-[100] h-[100dvh] w-screen' : fs ? 'h-full w-full' : 'relative mx-auto aspect-video max-h-[calc(100dvh-5.5rem)] w-full rounded-lg'} ${uiVisible ? '' : 'cursor-none'}`}>
         {src && (
-          <video key={src} ref={video} src={src} autoPlay className="h-full w-full" onClick={toggle} onDoubleClick={fullscreen}
+          <video key={src} ref={video} src={src} autoPlay playsInline className="h-full w-full" onClick={onTap} onDoubleClick={() => { if (!touch) fullscreen() }}
             onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
             onWaiting={() => setWaiting(true)} onPlaying={() => setWaiting(false)} onCanPlay={() => setWaiting(false)}
             onTimeUpdate={(e) => setCur(e.currentTarget.currentTime)}
@@ -190,41 +270,60 @@ export default function Watch() {
               else setErr('Não foi possível reproduzir este arquivo.')
             }} />
         )}
-        {waiting && !err && <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-zinc-300">Carregando…</div>}
-        {cue && (
-          <div className={`pointer-events-none absolute inset-x-0 flex justify-center px-6 text-center transition-all ${uiVisible ? 'bottom-24' : 'bottom-8'}`}>
-            <span className="whitespace-pre-line rounded bg-black/50 px-2 py-1 text-lg font-medium leading-snug text-white [text-shadow:0_1px_3px_#000] md:text-2xl">{cue.text}</span>
+        {waiting && !err && <div className="pointer-events-none absolute inset-0 grid place-items-center"><Loader2 size={40} className="animate-spin text-white/80" /></div>}
+        {flash && (
+          <div className={`pointer-events-none absolute top-1/2 grid h-24 w-24 -translate-y-1/2 place-items-center rounded-full bg-white/20 text-sm font-bold backdrop-blur ${flash.side < 0 ? 'left-[8%]' : 'right-[8%]'}`}>
+            {flash.side < 0 ? <RotateCcw size={26} /> : <RotateCw size={26} />}<span className="-mt-3 text-xs">10 s</span>
           </div>
         )}
-        <div className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent px-4 pb-3 pt-10 transition-opacity ${uiVisible ? 'opacity-100' : 'pointer-events-none opacity-0'}`}>
+        {touch && !playing && !waiting && !err && uiVisible && (
+          <button onClick={toggle} aria-label="Reproduzir" className="absolute left-1/2 top-1/2 grid h-16 w-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-accent-600/90 shadow-xl backdrop-blur active:scale-95">
+            <Play size={30} fill="white" className="ml-1" />
+          </button>
+        )}
+        {cue && (
+          <div className={`pointer-events-none absolute inset-x-0 flex justify-center px-3 text-center transition-all sm:px-6 ${uiVisible ? 'bottom-24 sm:bottom-24' : 'bottom-6 sm:bottom-8'}`}>
+            <span className="whitespace-pre-line rounded bg-black/55 px-2 py-1 text-[15px] font-medium leading-snug text-white [text-shadow:0_1px_3px_#000] sm:text-lg md:text-2xl">{cue.text}</span>
+          </div>
+        )}
+        {expanded && (
+          <div className={`pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/80 to-transparent px-4 pb-8 pt-3 text-sm font-semibold transition-opacity ${uiVisible ? 'opacity-100' : 'opacity-0'}`} style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}>
+            {file?.group} {file?.season != null ? `· T${file.season} E${file.episode}` : ''}
+          </div>
+        )}
+        {menu && info && (
+          <div className="absolute bottom-24 right-2 top-2 z-10 flex w-72 max-w-[calc(100%-1rem)] flex-col rounded-xl border border-white/10 bg-zinc-900/95 p-1.5 text-sm shadow-2xl backdrop-blur">
+            <div className="mb-1 flex shrink-0 gap-1">
+              {tabs.map((t) => (
+                <button key={t.id} onClick={() => setTab(t.id)} className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-semibold transition ${activeTab === t.id ? 'bg-accent-600 text-white' : 'text-zinc-300 hover:bg-white/10'}`}>{t.label}</button>
+              ))}
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {activeTab === 'audio' && <MenuGroup items={info.audio.map((a) => ({ key: a.index, label: audioLabel(a), on: a.index === audio }))} onPick={(k) => { changeAudio(Number(k)); setMenu(false) }} />}
+              {activeTab === 'sub' && <MenuGroup items={[{ key: -1, label: 'Sem legenda', on: subIdx === -1 }, ...info.subtitles.map((x) => ({ key: x.index, label: subLabel(x), on: x.index === subIdx, disabled: !x.textBased }))]} onPick={(k) => { setSubIdx(Number(k)); setMenu(false) }} />}
+              {activeTab === 'rate' && <MenuGroup items={[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => ({ key: r, label: r === 1 ? 'Normal' : r + 'x', on: r === rate }))} onPick={(k) => { setRate(Number(k)); setMenu(false) }} />}
+            </div>
+          </div>
+        )}
+        <div className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent px-3 pt-10 transition-opacity sm:px-4 ${uiVisible ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+          style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}>
           <input type="range" min={0} max={Math.max(1, Math.floor(duration))} value={Math.floor(abs)} onChange={(e) => seek(Number(e.target.value))}
-            className="mb-2 h-1 w-full cursor-pointer accent-accent-500" aria-label="Posição" />
-          <div className="flex flex-wrap items-center gap-3 text-sm">
-            <button onClick={toggle} className="grid h-9 w-9 place-items-center rounded-full bg-white/10 transition hover:bg-accent-600" aria-label="Reproduzir/Pausar">{playing ? <Pause size={24} fill="white" /> : <Play size={24} fill="white" />}</button>
-            <button onClick={() => seek(abs - 10)} className="text-zinc-300 hover:text-white" title="Voltar 10s (←)"><RotateCcw size={20} /></button>
-            <button onClick={() => seek(abs + 10)} className="text-zinc-300 hover:text-white" title="Avançar 10s (→)"><RotateCw size={20} /></button>
-            <span className="tabular-nums text-zinc-300">{fmt(abs)} / {fmt(duration)}</span>
-            <span className="flex items-center gap-1">
-              <button onClick={() => setMuted(!muted)} title="Mudo (m)">{muted || volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}</button>
-              <input type="range" min={0} max={1} step={0.05} value={muted ? 0 : volume} onChange={(e) => { setVolume(Number(e.target.value)); setMuted(false) }} className="w-20 accent-accent-500" aria-label="Volume" />
-            </span>
-            <span className="ml-auto flex flex-wrap items-center gap-2">
-              {info && info.audio.length > 1 && (
-                <select value={audio} onChange={(e) => changeAudio(Number(e.target.value))} className="max-w-40 rounded bg-surface2/90 px-2 py-1 text-xs" title="Áudio">
-                  {info.audio.map((a) => <option key={a.index} value={a.index}>🔊 {audioLabel(a)}</option>)}
-                </select>
-              )}
-              {info && info.subtitles.length > 0 && (
-                <select value={subIdx} onChange={(e) => setSubIdx(Number(e.target.value))} className="max-w-48 rounded bg-surface2/90 px-2 py-1 text-xs" title="Legenda">
-                  <option value={-1}>💬 Sem legenda</option>
-                  {info.subtitles.map((s) => <option key={s.index} value={s.index} disabled={!s.textBased}>💬 {subLabel(s)}</option>)}
-                </select>
-              )}
-              <select value={rate} onChange={(e) => setRate(Number(e.target.value))} className="rounded bg-surface2/90 px-2 py-1 text-xs" title="Velocidade">
-                {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => <option key={r} value={r}>{r}x</option>)}
-              </select>
-              {next && <button onClick={() => nav('/watch/' + next.id)} className="rounded bg-surface2/90 px-2 py-1 text-xs hover:bg-surface2">Próximo <SkipForward size={14} className="inline" /></button>}
-              <button onClick={fullscreen} title="Tela cheia (f)"><Maximize size={20} /></button>
+            className="seek mb-1 h-5 w-full cursor-pointer accent-accent-500" aria-label="Posição" />
+          <div className="flex items-center gap-0.5 text-sm sm:gap-1">
+            <button onClick={toggle} className={ctl} aria-label="Reproduzir/Pausar">{playing ? <Pause size={22} fill="white" /> : <Play size={22} fill="white" />}</button>
+            <button onClick={() => seek(abs - 10)} className={ctl} title="Voltar 10s (←)" aria-label="Voltar 10 segundos"><RotateCcw size={20} /></button>
+            <button onClick={() => seek(abs + 10)} className={ctl} title="Avançar 10s (→)" aria-label="Avançar 10 segundos"><RotateCw size={20} /></button>
+            <span className="ml-1 whitespace-nowrap text-xs tabular-nums text-zinc-300 sm:text-sm">{fmt(abs)} / {fmt(duration)}</span>
+            {!touch && (
+              <span className="ml-2 flex items-center gap-1">
+                <button onClick={() => setMuted(!muted)} className={ctl} title="Mudo (m)" aria-label="Mudo">{muted || volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}</button>
+                <input type="range" min={0} max={1} step={0.05} value={muted ? 0 : volume} onChange={(e) => { setVolume(Number(e.target.value)); setMuted(false) }} className="w-20 accent-accent-500" aria-label="Volume" />
+              </span>
+            )}
+            <span className="ml-auto flex items-center gap-0.5 sm:gap-1">
+              {next && <button onClick={() => nav('/watch/' + next.id)} className="flex h-10 items-center gap-1 rounded-full px-3 text-xs font-semibold hover:bg-white/15 active:bg-white/25">Próximo<SkipForward size={16} /></button>}
+              <button onClick={() => setMenu((m) => !m)} className={ctl} title="Áudio, legenda e velocidade" aria-label="Configurações"><Settings size={20} /></button>
+              <button onClick={fullscreen} className={ctl} title="Tela cheia (f)" aria-label="Tela cheia">{expanded ? <Minimize size={20} /> : <Maximize size={20} />}</button>
             </span>
           </div>
         </div>
@@ -232,7 +331,7 @@ export default function Watch() {
       {err && <div className="mt-3"><Notice text={err} /></div>}
       <p className="mt-3 text-xs text-zinc-500">
         {mode === 'transcode' ? 'Convertendo no servidor para o navegador (vídeo/áudio incompatível ou faixa de áudio trocada). ' : 'Reprodução direta. '}
-        Atalhos: espaço = pausar · ←/→ = ±10s · f = tela cheia · m = mudo.
+        {touch ? 'Toque duas vezes nas laterais para pular 10 s e no centro para pausar.' : 'Atalhos: espaço = pausar · ←/→ = ±10s · f = tela cheia · m = mudo.'}
       </p>
     </div>
   )
