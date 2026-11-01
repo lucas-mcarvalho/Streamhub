@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, type Indexer, type Integration } from '../api'
 import { btn, btnGhost, input, Modal, Notice, PageTitle, Spinner } from '../components/ui'
 import { useToast } from '../components/Toast'
@@ -75,6 +75,43 @@ function AddIndexer({ onClose, onDone }: { onClose: () => void; onDone: () => vo
   )
 }
 
+type Limits = { maxListMb: number; minMb: number; maxMb: number; defaultMb: number }
+
+function ChannelSettings() {
+  const toast = useToast()
+  const { data, reload } = useAsync(() => api<Limits>('/channels/settings'), [])
+  const [mb, setMb] = useState(48)
+  useEffect(() => { if (data) setMb(data.maxListMb) }, [data])
+  if (!data) return null
+  const dirty = mb !== data.maxListMb
+  const save = async () => {
+    try { await api('/channels/settings', { method: 'PUT', json: { maxListMb: mb } }); toast(`Limite ajustado para ${mb} MB`); reload() }
+    catch (e) { toast((e as Error).message, 'err') }
+  }
+  return (
+    <div className="mb-8">
+      <h2 className="mb-2 text-lg font-semibold">TV ao vivo</h2>
+      <div className="glass rounded-2xl p-4">
+        <label className="mb-1 block text-sm font-medium">Tamanho máximo de cada lista de canais (M3U)</label>
+        <p className="mb-3 text-xs text-zinc-400">
+          Listas maiores que o limite são recusadas com "Lista grande demais". O servidor carrega a lista inteira na memória para analisá-la,
+          então valores altos aumentam o uso de memória e deixam a abertura da lista mais lenta. As listas de teste mais comuns têm de 20 KB a 10 MB.
+        </p>
+        <div className="flex flex-wrap items-center gap-4">
+          <input type="range" min={data.minMb} max={data.maxMb} step={1} value={mb} onChange={(e) => setMb(Number(e.target.value))} className="min-w-[200px] flex-1 accent-accent-500" />
+          <div className="flex items-center gap-2">
+            <input type="number" min={data.minMb} max={data.maxMb} value={mb} onChange={(e) => setMb(Math.max(data.minMb, Math.min(data.maxMb, Number(e.target.value) || data.minMb)))} className={input + ' !w-24'} />
+            <span className="text-sm text-zinc-400">MB</span>
+          </div>
+          <button className={btn} disabled={!dirty} onClick={save}>Salvar</button>
+          <button className={btnGhost} disabled={mb === data.defaultMb} onClick={() => setMb(data.defaultMb)}>Padrão ({data.defaultMb} MB)</button>
+        </div>
+        <p className="mt-2 text-xs text-zinc-500">Faixa permitida: {data.minMb} a {data.maxMb} MB. A mudança vale na hora, sem reiniciar.</p>
+      </div>
+    </div>
+  )
+}
+
 export default function Settings() {
   const toast = useToast()
   const ints = useAsync(() => api<Integration[]>('/integrations'), [])
@@ -89,6 +126,8 @@ export default function Settings() {
       <h2 className="mb-2 text-lg font-semibold">Integrações</h2>
       <p className="mb-3 text-sm text-zinc-400">Credenciais são guardadas cifradas no banco. Chaves do Prowlarr/Sonarr/Radarr são lidas automaticamente do config.xml quando disponível.</p>
       <div className="mb-8 space-y-3">{ints.loading ? <Spinner /> : ints.data?.map((i) => <IntegrationRow key={i.service} it={i} onSaved={ints.reload} />)}</div>
+
+      <ChannelSettings />
 
       <div className="mb-2 flex items-center justify-between">
         <h2 className="text-lg font-semibold">Indexadores (Prowlarr)</h2>
