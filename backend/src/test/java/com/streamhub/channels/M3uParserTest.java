@@ -25,5 +25,15 @@ class M3uParserTest {
         assertEquals("Kids;General", e.get(0).group());
         assertEquals("https://exemplo.com/a/index.m3u8", e.get(0).url());
         assertEquals("Outros", e.get(1).group());
+        assertEquals("http://exemplo.com/b.ts", e.get(1).url());
+    }
+
+    @Test
+    void convertsXtreamLiveTsToHls() {
+        assertEquals("http://painel.tv:80/user/pass/8660.m3u8", M3uParser.toHls("http://painel.tv:80/user/pass/8660.ts"));
+        assertEquals("http://painel.tv/live/user/pass/12.m3u8", M3uParser.toHls("http://painel.tv/live/user/pass/12.ts"));
+        assertEquals("http://painel.tv/user/pass/12.m3u8", M3uParser.toHls("http://painel.tv/user/pass/12"));
+        assertEquals("http://painel.tv/movie/user/pass/12.mp4", M3uParser.toHls("http://painel.tv/movie/user/pass/12.mp4"));
+        assertEquals("http://cdn.tv/a/b/segment.ts", M3uParser.toHls("http://cdn.tv/a/b/segment.ts"));
     }
 }

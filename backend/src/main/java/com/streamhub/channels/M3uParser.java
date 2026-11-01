@@ -12,6 +12,9 @@ final class M3uParser {
 
     private static final Pattern ATTR = Pattern.compile("([A-Za-z0-9_-]+)=\"([^\"]*)\"");
 
+    /** Canal ao vivo de painel Xtream: /usuario/senha/123[.ts] ou /live/usuario/senha/123[.ts]. */
+    private static final Pattern XTREAM_TS = Pattern.compile("^(https?://[^/?#]+/(?:live/)?[^/?#]+/[^/?#]+/\\d+)(?:\\.ts)?$");
+
     static List<Entry> parse(String text) {
         List<Entry> out = new ArrayList<>();
         String name = null, logo = null, group = null;
@@ -28,12 +31,19 @@ final class M3uParser {
                 int comma = line.lastIndexOf(',');
                 name = comma >= 0 ? line.substring(comma + 1).trim() : null;
             } else if (!line.isEmpty() && !line.startsWith("#") && name != null) {
-                if (line.startsWith("http://") || line.startsWith("https://")) {
-                    out.add(new Entry(name.isBlank() ? "Canal sem nome" : name, logo, group == null || group.isBlank() ? "Outros" : group, line));
+                boolean adult = group != null && group.toLowerCase().contains("xxx");
+                if (!adult && (line.startsWith("http://") || line.startsWith("https://"))) {
+                    out.add(new Entry(name.isBlank() ? "Canal sem nome" : name, logo, group == null || group.isBlank() ? "Outros" : group, toHls(line)));
                 }
                 name = null;
             }
         }
         return out;
+    }
+
+    /** O player só toca HLS; esses painéis servem o mesmo canal como .m3u8. */
+    static String toHls(String url) {
+        Matcher m = XTREAM_TS.matcher(url);
+        return m.matches() ? m.group(1) + ".m3u8" : url;
     }
 }

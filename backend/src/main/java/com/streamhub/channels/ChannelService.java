@@ -12,7 +12,9 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -25,6 +27,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import com.streamhub.config.ApiException;
+import com.streamhub.config.AppSettingsService;
 
 /**
  * TV ao vivo a partir de listas M3U. O navegador nunca fala direto com os servidores dos canais: o
@@ -35,14 +38,25 @@ import com.streamhub.config.ApiException;
 public class ChannelService {
     private static final Pattern URI_ATTR = Pattern.compile("URI=\"([^\"]+)\"");
     private static final int MAX_PLAYLIST_BYTES = 8 * 1024 * 1024;       // playlists HLS
-    private static final int MAX_LIST_BYTES = 48 * 1024 * 1024;          // listas M3U de canais
     private static final int MAX_SHORT_LINKS = 30_000;
 
-    public record Proxied(int status, String contentType, byte[] body, InputStream stream) {}
+    /** `headers`: cabeçalhos repassados ao navegador (tamanho e faixa, para avançar em vídeos MP4). */
+    public record Proxied(int status, String contentType, byte[] body, InputStream stream, Map<String, String> headers) {
+        public Proxied(int status, String contentType, byte[] body, InputStream stream) { this(status, contentType, body, stream, Map.of()); }
+    }
+
+    /** Cabeçalhos da resposta de origem que o navegador precisa para pedir faixas de bytes. */
+    private static final List<String> PASS_HEADERS = List.of("Content-Length", "Content-Range", "Accept-Ranges");
 
     private record Cached(List<M3uParser.Entry> entries, long expires) {}
 
+    public static final String MAX_LIST_KEY = "channels.maxListMb";
+    public static final int DEFAULT_MAX_LIST_MB = 48;
+    public static final int MIN_MAX_LIST_MB = 1;
+    public static final int MAX_MAX_LIST_MB = 200;
+
     private final ChannelSourceRepository repo;
+    private final AppSettingsService settings;
     private final String secret;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10))
         .followRedirects(HttpClient.Redirect.NEVER).build();
@@ -54,16 +68,31 @@ public class ChannelService {
             protected boolean removeEldestEntry(java.util.Map.Entry<String, String> eldest) { return size() > MAX_SHORT_LINKS; }
         });
 
-    public ChannelService(ChannelSourceRepository repo, @Value("${streamhub.secret}") String secret) {
+    public ChannelService(ChannelSourceRepository repo, AppSettingsService settings, @Value("${streamhub.secret}") String secret) {
         this.repo = repo;
+        this.settings = settings;
         this.secret = secret;
+    }
+
+    // ---------- limite de tamanho das listas ----------
+
+    public int maxListMb() {
+        return Math.max(MIN_MAX_LIST_MB, Math.min(MAX_MAX_LIST_MB, settings.getInt(MAX_LIST_KEY, DEFAULT_MAX_LIST_MB)));
+    }
+
+    public void setMaxListMb(int mb) {
+        if (mb < MIN_MAX_LIST_MB || mb > MAX_MAX_LIST_MB) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION", "O limite deve ficar entre " + MIN_MAX_LIST_MB + " e " + MAX_MAX_LIST_MB + " MB");
+        }
+        settings.setInt(MAX_LIST_KEY, mb);
+        cache.clear(); // listas antes recusadas por tamanho podem agora ser carregadas
     }
 
     // ---------- fontes ----------
 
-    public List<ChannelSource> sources() { return repo.findAllByOrderByBuiltinDescIdAsc(); }
+    public List<ChannelSource> sources() { return repo.findAllByOrderByPositionAscIdAsc(); }
 
-    public ChannelSource addSource(String name, String url) {
+    public ChannelSource addSource(String name, String url, String origin) {
         if (name == null || name.isBlank()) throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION", "Informe um nome");
         if (url == null || !(url.startsWith("http://") || url.startsWith("https://"))) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION", "A URL da lista precisa começar com http:// ou https://");
@@ -71,6 +100,8 @@ public class ChannelService {
         ChannelSource s = new ChannelSource();
         s.setName(name.trim());
         s.setUrl(url.trim());
+        if (origin != null && !origin.isBlank()) s.setOrigin(origin.trim());
+        s.setPosition(100 + (int) repo.count());
         return repo.save(s);
     }
 
@@ -87,7 +118,7 @@ public class ChannelService {
         ChannelSource src = repo.findById(sourceId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "NO_SOURCE", "Lista não encontrada"));
         Cached c = cache.get(sourceId);
         if (c == null || c.expires() < System.currentTimeMillis()) {
-            String text = new String(fetch(URI.create(src.getUrl()), MAX_LIST_BYTES), StandardCharsets.UTF_8);
+            String text = new String(fetch(URI.create(src.getUrl()), maxListMb() * 1024 * 1024), StandardCharsets.UTF_8);
             c = new Cached(M3uParser.parse(text), System.currentTimeMillis() + 3600_000);
             cache.put(sourceId, c);
         }
@@ -95,7 +126,8 @@ public class ChannelService {
         List<M3uParser.Entry> entries = c.entries();
         for (int i = 0; i < entries.size(); i++) {
             M3uParser.Entry e = entries.get(i);
-            out.add(new Channel(i, e.name(), e.logo(), e.group().split(";")[0], e.url().toLowerCase().contains(".m3u8"),
+            out.add(new Channel(i, e.name(), e.logo(), e.group().split(";")[0], GenreClassifier.classify(e.group(), e.name()),
+                e.url().toLowerCase().contains(".m3u8"), isDirectVideo(e.url()),
                 "/api/channels/play/" + sourceId + "/" + i + "?t=" + sign("entry:" + sourceId + ":" + i)));
         }
         return out;
@@ -106,7 +138,7 @@ public class ChannelService {
             HttpResponse<InputStream> r = open(uri);
             try (InputStream in = r.body()) {
                 byte[] data = in.readNBytes(limit + 1);
-                if (data.length > limit) throw new ApiException(HttpStatus.BAD_GATEWAY, "TOO_BIG", "Lista grande demais (limite de " + limit / (1024 * 1024) + " MB)");
+                if (data.length > limit) throw new ApiException(HttpStatus.BAD_GATEWAY, "TOO_BIG", "Lista grande demais (limite atual: " + limit / (1024 * 1024) + " MB). Ajuste em Configurações > TV ao vivo.");
                 return data;
             }
         } catch (IOException e) {
@@ -120,12 +152,22 @@ public class ChannelService {
     // ---------- proxy de reprodução ----------
 
     /** Abre a URL seguindo redirecionamentos manualmente, validando cada destino contra SSRF. */
-    private HttpResponse<InputStream> open(URI start) throws IOException, InterruptedException {
+    private HttpResponse<InputStream> open(URI start) throws IOException, InterruptedException { return open(start, null); }
+
+    /** Vídeo que a tag &lt;video&gt; toca sem hls.js (filmes e séries das listas). */
+    static boolean isDirectVideo(String url) {
+        String path = url.split("[?#]", 2)[0].toLowerCase(); // sem URI.create: uma URL malformada não derruba a lista toda
+        return path.endsWith(".mp4") || path.endsWith(".m4v") || path.endsWith(".webm");
+    }
+
+    private HttpResponse<InputStream> open(URI start, String range) throws IOException, InterruptedException {
         URI uri = start;
         for (int hop = 0; hop < 5; hop++) {
             assertPublic(uri);
-            HttpRequest req = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(25))
-                .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) StreamHub").header("Accept-Encoding", "identity").GET().build();
+            HttpRequest.Builder b = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(25))
+                .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) StreamHub").header("Accept-Encoding", "identity");
+            if (range != null) b.header("Range", range);
+            HttpRequest req = b.GET().build();
             HttpResponse<InputStream> r = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
             int code = r.statusCode();
             if (code >= 300 && code < 400 && r.headers().firstValue("Location").isPresent()) {
@@ -154,41 +196,45 @@ public class ChannelService {
     }
 
     /** Entrada de um canal da lista: o endereço original fica só no servidor. */
-    public Proxied proxyEntry(long sourceId, int index, String token) {
+    public Proxied proxyEntry(long sourceId, int index, String token, String range) {
         if (!MessageDigest.isEqual(sign("entry:" + sourceId + ":" + index).getBytes(StandardCharsets.UTF_8), token.getBytes(StandardCharsets.UTF_8))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "BAD_TOKEN", "Assinatura inválida");
         }
         channels(sourceId); // garante a lista em cache
         List<M3uParser.Entry> entries = cache.get(sourceId).entries();
         if (index < 0 || index >= entries.size()) throw new ApiException(HttpStatus.NOT_FOUND, "NO_CHANNEL", "Canal não encontrado");
-        return proxyUrl(entries.get(index).url());
+        return proxyUrl(entries.get(index).url(), range);
     }
 
     /** Itens reescritos das playlists (sub-playlists, segmentos, chaves). */
-    public Proxied proxyShort(String id) {
+    public Proxied proxyShort(String id, String range) {
         String url = shortLinks.get(id);
         if (url == null) throw new ApiException(HttpStatus.NOT_FOUND, "LINK_EXPIRED", "Link expirado: reabra o canal");
-        return proxyUrl(url);
+        return proxyUrl(url, range);
     }
 
-    private Proxied proxyUrl(String url) {
+    private Proxied proxyUrl(String url, String range) {
         try {
             URI uri = URI.create(url);
-            HttpResponse<InputStream> r = open(uri);
+            HttpResponse<InputStream> r = open(uri, range);
             InputStream upstream = r.body();
             if (r.headers().firstValue("Content-Encoding").orElse("").toLowerCase().contains("gzip")) {
                 upstream = new java.util.zip.GZIPInputStream(upstream); // alguns servidores comprimem mesmo sem pedir
             }
             String type = r.headers().firstValue("Content-Type").orElse("application/octet-stream");
             boolean playlist = uri.getPath().toLowerCase().endsWith(".m3u8") || type.toLowerCase().contains("mpegurl");
-            if (!playlist) return new Proxied(r.statusCode(), type, null, upstream);
+            if (!playlist) {
+                Map<String, String> headers = new LinkedHashMap<>();
+                for (String h : PASS_HEADERS) r.headers().firstValue(h).ifPresent(v -> headers.put(h, v));
+                return new Proxied(r.statusCode(), type, null, upstream, headers);
+            }
             byte[] data;
             try (InputStream in = upstream) {
                 data = in.readNBytes(MAX_PLAYLIST_BYTES);
             }
             String text = new String(data, StandardCharsets.UTF_8);
             if (!text.startsWith("#EXTM3U")) return new Proxied(r.statusCode(), type, data, null);
-            return new Proxied(r.statusCode(), "application/vnd.apple.mpegurl", rewrite(text, uri).getBytes(StandardCharsets.UTF_8), null);
+            return new Proxied(r.statusCode(), "application/vnd.apple.mpegurl", rewrite(text, r.uri()).getBytes(StandardCharsets.UTF_8), null);
         } catch (ApiException e) {
             throw e;
         } catch (IOException e) {

@@ -21,4 +21,7 @@ public class ChannelSource {
     @Column(columnDefinition = "text")
     private String url;
     private boolean builtin;
+    /** De onde vem a lista (ex.: "iptv-org · Brasil"). */
+    private String origin;
+    private int position = 100;
 }
