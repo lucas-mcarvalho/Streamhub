@@ -19,6 +19,7 @@ export type Location = {
   id: number; name: string; path: string; kind: string; isDefault: boolean; exists: boolean; writable: boolean
   usage: Usage; percentUsed: number; lowSpace: boolean
 }
+export type Disk = { name: string; fsType: string; rootIndex: number; relativePath: string; usage: Usage; writable: boolean }
 export type Root = { index: number; path: string; exists: boolean; usage: Usage }
 export type Download = {
   id: number; title: string; kind: string; indexer?: string; status: string; progress: number; sizeBytes: number

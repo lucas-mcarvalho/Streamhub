@@ -28,6 +28,8 @@ public class StorageService {
 
     public record RootView(int index, String path, boolean exists, Usage usage) {}
 
+    public record DiskView(String name, String fsType, int rootIndex, String relativePath, Usage usage, boolean writable) {}
+
     public record DirEntry(String name, String relativePath) {}
 
     public record LocationView(Long id, String name, String path, String kind, boolean isDefault, boolean exists,
@@ -36,14 +38,17 @@ public class StorageService {
     private final StorageLocationRepository repo;
     private final List<Path> roots = new ArrayList<>();
     private final long minFreeBytes;
+    private final Path disksDir;
 
     public StorageService(StorageLocationRepository repo,
                           @Value("${streamhub.storage.allowed-roots}") String allowedRoots,
+                          @Value("${streamhub.storage.disks-dir:/disks}") String disksDir,
                           @Value("${streamhub.storage.min-free-gb}") long minFreeGb) {
         this.repo = repo;
         for (String r : allowedRoots.split("[,;]")) {
             if (!r.isBlank()) roots.add(Path.of(r.trim()).toAbsolutePath().normalize());
         }
+        this.disksDir = Path.of(disksDir.trim()).toAbsolutePath().normalize();
         this.minFreeBytes = minFreeGb * 1024 * 1024 * 1024;
     }
 
@@ -72,6 +77,29 @@ public class StorageService {
         List<RootView> out = new ArrayList<>();
         for (int i = 0; i < roots.size(); i++) {
             out.add(new RootView(i, roots.get(i).toString(), Files.isDirectory(roots.get(i)), usage(roots.get(i))));
+        }
+        return out;
+    }
+
+    /** Discos montados no PC (visíveis em DISKS_DIR): só entram pastas que são ponto de montagem de outro dispositivo. */
+    public List<DiskView> disks() {
+        int idx = roots.indexOf(disksDir);
+        if (idx < 0 || !Files.isDirectory(disksDir)) return List.of();
+        String baseDev;
+        try { baseDev = Files.getFileStore(disksDir).name(); } catch (IOException e) { baseDev = ""; }
+        List<DiskView> out = new ArrayList<>();
+        try (Stream<Path> s = Files.list(disksDir)) {
+            for (Path p : s.filter(Files::isDirectory).sorted().toList()) {
+                try {
+                    var store = Files.getFileStore(p);
+                    boolean mounted = !store.name().equals(baseDev) || store.toString().startsWith(p + " (");
+                    if (!mounted || store.getTotalSpace() == 0) continue;
+                    out.add(new DiskView(p.getFileName().toString(), store.type(), idx,
+                        p.getFileName().toString(), usage(p), Files.isWritable(p)));
+                } catch (IOException ignored) { /* disco indisponível: ignora */ }
+            }
+        } catch (IOException e) {
+            return List.of();
         }
         return out;
     }

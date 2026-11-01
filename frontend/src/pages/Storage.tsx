@@ -1,8 +1,67 @@
 import { useEffect, useState } from 'react'
-import { api, fmtBytes, kindLabel, type Location, type Root } from '../api'
+import { api, fmtBytes, kindLabel, type Disk, type Location, type Root } from '../api'
 import { Bar, btn, btnGhost, input, Modal, Notice, PageTitle, Spinner } from '../components/ui'
 import { useToast } from '../components/Toast'
 import { useAsync } from '../hooks'
+
+function AddDisk({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const toast = useToast()
+  const disks = useAsync(() => api<Disk[]>('/storage/disks'), [])
+  const [pick, setPick] = useState<Disk>()
+  const [name, setName] = useState('')
+  const [kind, setKind] = useState('GENERAL')
+  const [sub, setSub] = useState('StreamHub')
+  const [makeDefault, setMakeDefault] = useState(true)
+  const [busy, setBusy] = useState(false)
+
+  const choose = (d: Disk) => { setPick(d); setName(d.name) }
+  const save = async () => {
+    if (!pick) return
+    setBusy(true)
+    try {
+      const loc = await api<Location>('/storage/locations', {
+        method: 'POST',
+        json: { name, rootIndex: pick.rootIndex, relativePath: `${pick.relativePath}/${sub.replace(/^\/+|\/+$/g, '')}`.replace(/\/$/, ''), kind, makeDefault, createIfMissing: true },
+      })
+      await api(`/storage/locations/${loc.id}/test`, { method: 'POST' })
+      toast('Disco adicionado e pronto para downloads'); onDone()
+    } catch (e) { toast((e as Error).message, 'err'); setBusy(false) }
+  }
+
+  return (
+    <Modal title="Adicionar disco" onClose={onClose}>
+      <p className="mb-3 text-xs text-zinc-400">Discos conectados ao computador do servidor (SSD/HD externo, pen drive). Conectou agora? Toque em “Atualizar”.</p>
+      {disks.loading ? <Spinner /> : (
+        <ul className="mb-3 space-y-2">
+          {disks.data?.length === 0 && <li className="rounded border border-line px-3 py-3 text-sm text-zinc-400">Nenhum disco detectado. Monte o disco no sistema (ele precisa aparecer no gerenciador de arquivos) e atualize. Se o problema continuar, confira DISKS_DIR no <span className="font-mono">.env</span>.</li>}
+          {disks.data?.map((d) => (
+            <li key={d.name}>
+              <button disabled={!d.writable} onClick={() => choose(d)}
+                className={`w-full rounded-lg border p-3 text-left transition disabled:opacity-50 ${pick?.name === d.name ? 'border-accent-500 bg-accent-500/10' : 'border-line hover:border-accent-500/50'}`}>
+                <div className="flex justify-between gap-2 text-sm font-medium"><span className="truncate">💽 {d.name}</span><span className="shrink-0 text-xs text-zinc-400">{d.fsType}</span></div>
+                <Bar percent={d.usage.total ? (d.usage.used / d.usage.total) * 100 : 0} />
+                <div className="mt-1 text-xs text-zinc-400">{fmtBytes(d.usage.free)} livres de {fmtBytes(d.usage.total)}{!d.writable && ' · sem permissão de gravação (somente leitura)'}</div>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <button className={btnGhost + ' mb-4'} onClick={disks.reload}>Atualizar</button>
+      {pick && (
+        <>
+          <input className={input + ' mb-3'} value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome (ex.: SSD externo)" />
+          <label className="text-xs text-zinc-400">Pasta dentro do disco (criada se não existir)</label>
+          <input className={input + ' mb-3'} value={sub} onChange={(e) => setSub(e.target.value)} placeholder="StreamHub" />
+          <select className={input + ' mb-3'} value={kind} onChange={(e) => setKind(e.target.value)}>
+            {Object.entries(kindLabel).map(([k, v]) => <option key={k} value={k}>{k === 'GENERAL' ? 'Geral (padrão de downloads)' : v}</option>)}
+          </select>
+          <label className="mb-4 flex items-center gap-2 text-sm"><input type="checkbox" checked={makeDefault} onChange={(e) => setMakeDefault(e.target.checked)} /> Usar como padrão deste tipo</label>
+          <button className={btn} disabled={!name.trim() || busy} onClick={save}>{busy ? 'Adicionando…' : 'Adicionar disco'}</button>
+        </>
+      )}
+    </Modal>
+  )
+}
 
 type Dir = { name: string; relativePath: string }
 
@@ -60,6 +119,7 @@ export default function Storage() {
   const locs = useAsync(() => api<Location[]>('/storage/locations'), [])
   const roots = useAsync(() => api<Root[]>('/storage/roots'), [])
   const [adding, setAdding] = useState(false)
+  const [addingDisk, setAddingDisk] = useState(false)
 
   const act = async (fn: () => Promise<unknown>, ok: string) => {
     try { await fn(); toast(ok); locs.reload() } catch (e) { toast((e as Error).message, 'err') }
@@ -69,7 +129,10 @@ export default function Storage() {
     <div>
       <div className="mb-4 flex items-center justify-between">
         <PageTitle sub="Discos e pastas do servidor">Armazenamento</PageTitle>
-        <button className={btn} onClick={() => setAdding(true)} disabled={!roots.data?.length}>+ Registrar pasta</button>
+        <div className="flex gap-2">
+          <button className={btn} onClick={() => setAddingDisk(true)}>+ Adicionar disco</button>
+          <button className={btnGhost} onClick={() => setAdding(true)} disabled={!roots.data?.length}>Registrar pasta</button>
+        </div>
       </div>
       <p className="mb-4 text-sm text-zinc-400">Os discos e pastas listados são os do <b>servidor</b> que executa o backend, não do dispositivo do navegador.</p>
 
@@ -112,6 +175,7 @@ export default function Storage() {
           </div>
         ))}
       </div>
+      {addingDisk && <AddDisk onClose={() => setAddingDisk(false)} onDone={() => { setAddingDisk(false); locs.reload(); roots.reload() }} />}
       {adding && roots.data && <AddModal roots={roots.data} onClose={() => setAdding(false)} onDone={() => { setAdding(false); locs.reload() }} />}
     </div>
   )

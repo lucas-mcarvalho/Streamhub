@@ -42,5 +42,6 @@ streamhub:
     jellyfin: { url: "${JELLYFIN_URL:}", key: "${JELLYFIN_API_KEY:}", public-url: "${JELLYFIN_PUBLIC_URL:http://localhost:8096}" }
   storage:
     allowed-roots: ${STORAGE_ALLOWED_ROOTS:/media}
+    disks-dir: ${STORAGE_DISKS_DIR:/disks}
     min-free-gb: ${STORAGE_MIN_FREE_GB:5}
     qbit-path-map: ${QBIT_PATH_MAP:}
