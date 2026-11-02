@@ -75,6 +75,50 @@ function AddIndexer({ onClose, onDone }: { onClose: () => void; onDone: () => vo
   )
 }
 
+type Accel = {
+  mode: 'auto' | 'cpu'
+  active: { kind: 'VAAPI' | 'NVENC' | 'CPU'; device?: string; label: string }
+  available: { kind: string; device?: string; label: string }[]
+}
+
+function PlaybackSettings() {
+  const toast = useToast()
+  const { data, setData } = useAsync(() => api<Accel>('/library/accel'), [])
+  const [busy, setBusy] = useState(false)
+  if (!data) return null
+  const save = async (json: { mode?: string; redetect?: boolean }, ok: string) => {
+    setBusy(true)
+    try { setData(await api<Accel>('/library/accel', { method: 'PUT', json })); toast(ok) }
+    catch (e) { toast((e as Error).message, 'err') }
+    finally { setBusy(false) }
+  }
+  return (
+    <div className="mb-8">
+      <h2 className="mb-2 text-lg font-semibold">Reprodução</h2>
+      <div className="glass rounded-2xl p-4">
+        <label className="mb-1 block text-sm font-medium">Aceleração de vídeo</label>
+        <p className="mb-3 text-xs text-zinc-400">
+          Vídeos que o navegador não toca direto (como HEVC 10 bits) são convertidos no servidor. Pela GPU, a conversão quase não usa o processador;
+          sem GPU, o processador converte em ritmo limitado, só um pouco à frente do que está sendo assistido.
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <select value={data.mode} disabled={busy} onChange={(e) => save({ mode: e.target.value }, 'Aceleração de vídeo atualizada')} className={input + ' !w-auto'}>
+            <option value="auto">Automática (usa a GPU quando houver)</option>
+            <option value="cpu">Desligada (sempre o processador)</option>
+          </select>
+          <button className={btnGhost} disabled={busy} onClick={() => save({ redetect: true }, 'Detecção concluída')}>Detectar GPU novamente</button>
+        </div>
+        <p className="mt-3 text-sm">Em uso agora: <span className={data.active.kind === 'CPU' ? 'text-amber-400' : 'text-emerald-400'}>{data.active.label}</span></p>
+        <p className="mt-1 text-xs text-zinc-500">
+          {data.available.length
+            ? `GPUs disponíveis: ${data.available.map((a) => a.label).join(', ')}. A conversão em andamento continua como começou; a mudança vale ao abrir ou pular o vídeo.`
+            : 'Nenhuma GPU disponível para o servidor. Para usar a GPU integrada (Intel/AMD) ou NVIDIA, ative o arquivo docker-compose correspondente (veja o README).'}
+        </p>
+      </div>
+    </div>
+  )
+}
+
 type Limits = { maxListMb: number; minMb: number; maxMb: number; defaultMb: number }
 
 function ChannelSettings() {
@@ -127,6 +171,7 @@ export default function Settings() {
       <p className="mb-3 text-sm text-zinc-400">Credenciais são guardadas cifradas no banco. Chaves do Prowlarr/Sonarr/Radarr são lidas automaticamente do config.xml quando disponível.</p>
       <div className="mb-8 space-y-3">{ints.loading ? <Spinner /> : ints.data?.map((i) => <IntegrationRow key={i.service} it={i} onSaved={ints.reload} />)}</div>
 
+      <PlaybackSettings />
       <ChannelSettings />
 
       <div className="mb-2 flex items-center justify-between">

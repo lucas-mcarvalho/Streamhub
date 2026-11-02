@@ -1,0 +1,9 @@
+# Conversão de vídeo pela GPU integrada (Intel ou AMD), via VAAPI.
+# Ative com COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml no .env (veja o README).
+services:
+  backend:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      # grupo dono de /dev/dri/renderD* no computador: getent group render | cut -d: -f3
+      - "${RENDER_GID:?defina RENDER_GID no .env (getent group render | cut -d: -f3)}"

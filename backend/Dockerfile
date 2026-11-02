@@ -6,7 +6,8 @@ COPY src src
 RUN mvn -q -B -DskipTests package
 
 FROM eclipse-temurin:21-jre
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+# drivers VAAPI (GPU Intel e AMD); só são usados se o contêiner receber /dev/dri (docker-compose.gpu.yml)
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg intel-media-va-driver mesa-va-drivers && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
 EXPOSE 8080

@@ -14,6 +14,7 @@ Aplicação web para **pesquisar, baixar, organizar e assistir filmes, séries e
 - [Início rápido](#início-rápido)
 - [Configuração](#configuração)
 - [Armazenamento e Docker](#armazenamento-e-docker)
+- [Aceleração de vídeo (GPU)](#aceleração-de-vídeo-gpu)
 - [Fluxo de uso](#fluxo-de-uso)
 - [API](#api)
 - [Desenvolvimento](#desenvolvimento)
@@ -56,7 +57,7 @@ Aplicação web para **pesquisar, baixar, organizar e assistir filmes, séries e
 - Player com **troca de faixa de áudio**, **legendas** (PT-BR escolhida automaticamente quando existe), velocidade, tela cheia, atalhos de teclado e **próximo episódio**.
 - Em **Configurações do player > Legenda**, use **Adiantar/Atrasar 0,5 s** para sincronizar a legenda. O ajuste fica salvo por episódio neste navegador; **Restaurar sincronização** volta a zero. Legendas simultâneas são exibidas juntas.
 - O ícone de **Downloads** mostra em tempo real quantos downloads estão baixando ou aguardando na fila, nos dois modos da interface. Pausados, concluídos, com erro e aguardando escolha de episódios ficam fora do contador.
-- **Conversão no servidor (ffmpeg)** para formatos que o navegador não toca.
+- **Conversão no servidor (ffmpeg)** para formatos que o navegador não toca, pela **GPU** (Intel/AMD ou NVIDIA) quando disponível e em ritmo limitado para poupar o processador. Veja [Aceleração de vídeo (GPU)](#aceleração-de-vídeo-gpu).
 - Exclusão de arquivos pela biblioteca.
 
 **Integrações opcionais**: Sonarr e Radarr (importação), Jellyfin (atualização da biblioteca e "continuar assistindo").
@@ -156,6 +157,37 @@ As credenciais das integrações também podem ser editadas em **Configurações
 - **HD externo:** monte o disco no computador, defina `EXTRA_STORAGE` no `.env` (ex.: `EXTRA_STORAGE=/run/media/usuario/MEUHD`) e rode `docker compose up -d`. Ele aparece como `/hd1` (já autorizado em `STORAGE_ALLOWED_ROOTS`); registre as pastas em **Armazenamento**. Monte o HD **antes** de iniciar o Docker e evite mover pastas com download ativo.
 - **Biblioteca por fora:** vídeos copiados manualmente para uma pasta registrada (`Nome do Título (Ano)/Titulo.S01E01.mkv`) aparecem sozinhos na biblioteca.
 - **Windows:** aponte `MEDIA_ROOT` para algo como `D:/Midia`; discos extras entram como volumes adicionais.
+
+## Aceleração de vídeo (GPU)
+
+Vídeos que o navegador não reproduz direto (por exemplo, HEVC/x265 10 bits, comum em animes) são convertidos para H.264 pelo servidor enquanto você assiste. O StreamHub testa o que existe no computador ao iniciar e escolhe sozinho, nesta ordem:
+
+| Computador | Conversão | Uso do processador |
+|---|---|---|
+| GPU integrada Intel (7ª geração ou mais nova) ou AMD Ryzen | VAAPI | muito baixo |
+| GPU NVIDIA | NVENC | baixo |
+| Sem GPU disponível para o Docker | processador (libx264) | médio |
+
+Em todos os casos, a conversão entrega os primeiros 30 segundos o mais rápido possível e depois segue só 1,5× à frente da reprodução, sem ocupar o processador inteiro. Se a GPU não decodificar o formato de um arquivo, o processador decodifica e a GPU só codifica.
+
+Sem configuração extra, o Docker não dá acesso à GPU, e a conversão usa o processador. Para ativar, acrescente ao `.env`:
+
+**GPU integrada Intel ou AMD** (Linux):
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
+RENDER_GID=987   # o número do seu sistema: getent group render | cut -d: -f3
+```
+
+**GPU NVIDIA** (requer o [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)):
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.nvidia.yml
+```
+
+Depois rode `docker compose up -d --build`. Em **Configurações > Reprodução** aparece a opção em uso, com o botão **Detectar GPU novamente** e a opção de desligar a aceleração. Em notebooks com as duas GPUs, prefira a integrada: ela costuma ser mais rápida para isso e gasta menos energia.
+
+No Windows e no macOS (Docker Desktop), a GPU integrada não fica acessível ao Docker. No Windows, a NVIDIA funciona via WSL2 com o arquivo `docker-compose.nvidia.yml`; nos demais casos, a conversão usa o processador.
 
 ## Velocidade dos downloads
 

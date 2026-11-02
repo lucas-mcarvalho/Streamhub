@@ -1,6 +1,10 @@
 package com.streamhub.library;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -11,6 +15,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -49,11 +54,14 @@ public class LibraryService {
     private final StorageLocationRepository locations;
     private final StorageService storage;
     private final String secret;
+    private final VideoAccel accel;
 
-    public LibraryService(StorageLocationRepository locations, StorageService storage, @Value("${streamhub.secret}") String secret) {
+    public LibraryService(StorageLocationRepository locations, StorageService storage, @Value("${streamhub.secret}") String secret,
+                          VideoAccel accel) {
         this.locations = locations;
         this.storage = storage;
         this.secret = secret;
+        this.accel = accel;
     }
 
     private static String encodeId(long locId, String rel) {
@@ -238,23 +246,75 @@ public class LibraryService {
         }
     }
 
-    /** Inicia o ffmpeg gerando MP4 fragmentado (vídeo copiado quando possível, áudio em AAC estéreo). */
-    public Process startTranscode(String id, double start, int audioIndex) {
+    /** Conversão em andamento; {@code paced}: o vídeo está sendo recodificado e deve seguir em ritmo limitado. */
+    public record Transcode(Process process, boolean paced) {}
+
+    /** Segundos de vídeo entregues sem limite ao abrir ou pular, e depois o ritmo máximo em relação ao tempo real. */
+    private static final double BURST_SECONDS = 30, PACE = 1.5;
+
+    /**
+     * Inicia o ffmpeg gerando MP4 fragmentado (vídeo copiado quando possível, áudio em AAC estéreo).
+     * Ao converter o vídeo, usa a GPU quando houver.
+     */
+    public Transcode startTranscode(String id, double start, int audioIndex) {
         Path p = resolve(id);
         MediaInfo info = info(id);
         boolean copyVideo = "h264".equals(info.videoCodec()) && "yuv420p".equals(info.pixFmt());
+        VideoAccel.Plan plan = copyVideo ? null : accel.plan(p, info);
         List<String> cmd = new ArrayList<>(List.of("ffmpeg", "-v", "error", "-nostdin"));
+        if (plan != null) cmd.addAll(List.of("-progress", "pipe:2", "-nostats"));
+        if (plan != null) cmd.addAll(plan.input());
         if (start > 0) cmd.addAll(List.of("-ss", String.valueOf(start)));
         cmd.addAll(List.of("-i", p.toString(), "-map", "0:v:0"));
         if (!info.audio().isEmpty()) cmd.addAll(List.of("-map", "0:a:" + Math.max(0, Math.min(audioIndex, info.audio().size() - 1))));
-        if (copyVideo) cmd.addAll(List.of("-c:v", "copy"));
-        else cmd.addAll(List.of("-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"));
+        cmd.addAll(plan == null ? List.of("-c:v", "copy") : plan.video());
         cmd.addAll(List.of("-c:a", "aac", "-b:a", "192k", "-ac", "2", "-sn",
             "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"));
         try {
-            return new ProcessBuilder(cmd).redirectError(ProcessBuilder.Redirect.DISCARD).start();
+            ProcessBuilder pb = new ProcessBuilder(cmd);
+            if (plan == null) pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+            return new Transcode(pb.start(), plan != null);
         } catch (IOException e) {
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "NO_FFMPEG", "ffmpeg não está disponível no servidor");
+        }
+    }
+
+    /**
+     * Repassa o MP4 ao navegador. Ao recodificar, depois dos primeiros segundos segue só um pouco à frente do tempo real:
+     * enquanto a saída não é lida, o ffmpeg fica parado esperando, sem gastar processador.
+     */
+    public void pipe(Transcode t, OutputStream out) throws IOException {
+        Process pr = t.process();
+        AtomicLong encodedMicros = new AtomicLong();
+        if (t.paced()) Thread.ofVirtual().start(() -> readProgress(pr.getErrorStream(), encodedMicros));
+        long started = System.nanoTime();
+        byte[] buf = new byte[64 * 1024];
+        try (InputStream in = pr.getInputStream()) {
+            for (int n; (n = in.read(buf)) >= 0; ) {
+                out.write(buf, 0, n);
+                if (!t.paced()) continue;
+                double ahead;
+                while ((ahead = encodedMicros.get() / 1e6 - (BURST_SECONDS + PACE * (System.nanoTime() - started) / 1e9)) > 0) {
+                    out.flush();
+                    Thread.sleep(Math.min(1000, (long) (ahead * 1000 / PACE) + 1));
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            pr.destroyForcibly();
+        }
+    }
+
+    /** Lê o "-progress" do ffmpeg (linhas "out_time_us=..."), que diz até onde o vídeo já foi convertido. */
+    private static void readProgress(InputStream err, AtomicLong encodedMicros) {
+        try (var r = new BufferedReader(new InputStreamReader(err, StandardCharsets.UTF_8))) {
+            for (String line; (line = r.readLine()) != null; ) {
+                if (!line.startsWith("out_time_us=")) continue;
+                try { encodedMicros.set(Long.parseLong(line.substring(12).trim())); } catch (NumberFormatException ignored) { }
+            }
+        } catch (IOException ignored) {
+            // o processo terminou
         }
     }
 
