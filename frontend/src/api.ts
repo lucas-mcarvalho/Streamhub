@@ -8,6 +8,7 @@ export type Genre = { id: string; name: string }
 export type Section = { key: string; title: string; items: CatalogItem[]; error?: string }
 export type Season = { number: number; name: string; episodeCount: number; airDate?: string }
 export type Episode = { number: number; name: string; overview?: string; airDate?: string; stillUrl?: string; runtime?: number }
+export type GuideEpisode = { season: number; number: number; absolute: number; name: string; overview?: string; stillUrl?: string; runtime?: number }
 export type Release = {
   guid: string; title: string; resolution: string; source?: string; codec?: string; sizeBytes: number
   seeders?: number; leechers?: number; indexer: string; indexerId: number; publishDate?: string

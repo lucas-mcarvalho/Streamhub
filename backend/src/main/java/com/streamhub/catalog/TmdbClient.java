@@ -105,6 +105,18 @@ public class TmdbClient {
         return mapList(get("/search/" + type, "query", q, "page", page), type);
     }
 
+    /** Id da série no TMDB sem o filtro de animes (usado só para buscar o guia de episódios). */
+    public java.util.Optional<String> findTvId(String query, Integer year) {
+        List<Map<String, Object>> results = J.maps(get("/search/tv", "query", query, "page", 1).get("results"));
+        if (year != null) {
+            for (Map<String, Object> r : results) {
+                Integer y = year(J.str(r.get("first_air_date")));
+                if (y != null && Math.abs(y - year) <= 1) return java.util.Optional.of(String.valueOf(J.integer(r.get("id"))));
+            }
+        }
+        return results.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(String.valueOf(J.integer(results.get(0).get("id"))));
+    }
+
     public List<CatalogItem> topRated(String type, int page) { return mapList(get("/" + type + "/top_rated", "page", page), type); }
 
     public List<Genre> genreList(String type) {

@@ -40,6 +40,12 @@ public class CatalogController {
             .orElseGet(() -> org.springframework.http.ResponseEntity.noContent().build());
     }
 
+    /** Títulos e descrições dos episódios da série de uma pasta da biblioteca. */
+    @GetMapping("/episode-guide")
+    public List<GuideEpisode> episodeGuide(@RequestParam String title, @RequestParam(defaultValue = "GENERAL") String kind) {
+        return service.episodeGuide(title, kind);
+    }
+
     @GetMapping("/title/{source}/{type}/{id}")
     public TitleDetails details(@PathVariable String source, @PathVariable String type, @PathVariable String id) {
         return service.details(source, type, id);

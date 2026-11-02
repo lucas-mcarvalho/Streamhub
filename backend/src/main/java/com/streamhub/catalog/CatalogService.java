@@ -133,6 +133,42 @@ public class CatalogService {
 
     public List<Episode> episodes(String id, int season) { return tmdb.episodes(id, season); }
 
+    /** Guia de episódios (título, descrição, imagem e duração) da série que corresponde a uma pasta da biblioteca. */
+    public List<GuideEpisode> episodeGuide(String folderName, String kind) {
+        return cached("guide:" + folderName.toLowerCase() + "|" + kind, 6 * 3600, () -> doGuide(folderName, kind));
+    }
+
+    private List<GuideEpisode> doGuide(String folderName, String kind) {
+        try {
+            Optional<CatalogItem> m = match(folderName, kind);
+            String tvId = null;
+            if (m.isPresent() && "tmdb".equals(m.get().source()) && "tv".equals(m.get().type())) tvId = m.get().id();
+            if (tvId == null) {
+                // animes vêm do AniList: procura a mesma série no TMDB pelo título
+                List<String> names = new ArrayList<>();
+                m.ifPresent(i -> { if (i.title() != null) names.add(i.title()); if (i.originalTitle() != null) names.add(i.originalTitle()); });
+                names.add(NOISE.matcher(folderName).replaceAll(" ").replaceAll("\\s+", " ").trim());
+                Integer year = m.map(CatalogItem::year).orElse(null);
+                for (String n : names) {
+                    tvId = tmdb.findTvId(n, year).orElse(null);
+                    if (tvId != null) break;
+                }
+            }
+            if (tvId == null) return List.of();
+            List<GuideEpisode> out = new ArrayList<>();
+            int absolute = 0;
+            for (Season sn : tmdb.seasons(tvId)) {
+                for (Episode e : tmdb.episodes(tvId, sn.number())) {
+                    out.add(new GuideEpisode(sn.number(), e.number(), ++absolute, e.name(), e.overview(), e.stillUrl(), e.runtime()));
+                }
+            }
+            return out;
+        } catch (RuntimeException e) {
+            org.slf4j.LoggerFactory.getLogger(CatalogService.class).warn("Guia de episódios indisponível para '{}': {}", folderName, e.toString());
+            return List.of();   // sem TMDB configurado ou série não encontrada: a biblioteca segue sem o guia
+        }
+    }
+
     /** Encontra o título do catálogo que corresponde ao nome de uma pasta da biblioteca (ex.: "ONE PIECE (1999)"). */
     public Optional<CatalogItem> match(String folderName, String kind) {
         String key = (folderName + "|" + kind).toLowerCase();
