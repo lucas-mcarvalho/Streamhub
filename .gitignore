@@ -2,3 +2,5 @@
 media/
 data/
 node_modules/
+frontend/dist/
+*.tsbuildinfo

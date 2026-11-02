@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { Clapperboard } from 'lucide-react'
 import { api, auth } from './api'
 import Layout from './components/Layout'
+import { DownloadsProvider } from './components/DownloadsProvider'
 import { ToastProvider } from './components/Toast'
 import { btn, input } from './components/ui'
 import Downloads from './pages/Downloads'
@@ -18,6 +19,7 @@ import Channels from './pages/Channels'
 import Storage from './pages/Storage'
 import TitlePage from './pages/TitlePage'
 import Watch from './pages/Watch'
+import Episodes from './pages/Episodes'
 import { ThemeProvider } from './theme'
 
 function Login({ onDone }: { onDone: () => void }) {
@@ -57,6 +59,7 @@ export default function App() {
   return (
     <ThemeProvider>
       <ToastProvider>
+        <DownloadsProvider>
         <BrowserRouter>
           <Routes>
             <Route element={<Layout onLogout={() => setLogged(false)} />}>
@@ -76,9 +79,11 @@ export default function App() {
               <Route path="storage" element={<Storage />} />
               <Route path="settings" element={<Settings />} />
               <Route path="watch/:id" element={<Watch />} />
+              <Route path="episodes/:kind/:group" element={<Episodes />} />
             </Route>
           </Routes>
         </BrowserRouter>
+        </DownloadsProvider>
       </ToastProvider>
     </ThemeProvider>
   )

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { CheckCircle2, ExternalLink, Film, HardDrive, Play, Search, Trash2, X } from 'lucide-react'
+import { CheckCircle2, ExternalLink, Film, HardDrive, LayoutGrid, Play, Search, Trash2, X } from 'lucide-react'
 import { api, fmtBytes, genrePt, progressOf, type CatalogItem, type GuideEpisode, type LibraryFile } from '../api'
 import ContinueRow from '../components/ContinueRow'
 import { useToast } from '../components/Toast'
@@ -85,6 +85,7 @@ function Detail({ g, meta, onClose, onChanged }: { g: Group; meta: Meta; onClose
         <div className="px-6 pb-10">
           {meta?.overview && <p className="mb-5 line-clamp-4 text-sm leading-relaxed text-zinc-300">{meta.overview}</p>}
           <div className="mb-6 flex flex-wrap gap-3">
+            {g.files.some((f) => f.episode != null) && <Link to={`/episodes/${g.kind}/${encodeURIComponent(g.name)}`} className="inline-flex items-center gap-2 rounded-lg bg-accent-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-500"><LayoutGrid size={14} />Ver episódios</Link>}
             {meta && <Link to={`/title/${meta.source}/${meta.type}/${meta.id}`} className="inline-flex items-center gap-2 rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent-500/60"><ExternalLink size={14} />Página do título</Link>}
             <button onClick={() => remove(g.files.map((f) => f.id), `todos os ${g.files.length} arquivo(s)`)} className="inline-flex items-center gap-2 rounded-lg border border-line px-3 py-1.5 text-sm text-zinc-400 hover:border-red-500/60 hover:text-red-400"><Trash2 size={14} />Apagar tudo</button>
             <span className="ml-auto self-center text-xs text-zinc-500">{g.files.length} arquivo(s) · {fmtBytes(g.size)}</span>

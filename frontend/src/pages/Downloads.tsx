@@ -2,48 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ListChecks, Pause, Play } from 'lucide-react'
-import { api, authHeaders, fmtBytes, fmtEta, kindLabel, type Download, type DownloadFile } from '../api'
+import { api, fmtBytes, fmtEta, kindLabel, type Download, type DownloadFile } from '../api'
 import { Bar, btn, btnGhost, input, Modal, PageTitle, Spinner } from '../components/ui'
 import { useToast } from '../components/Toast'
+import { useDownloads } from '../components/DownloadsProvider'
 
 const statusLabel: Record<string, string> = {
   QUEUED: 'Aguardando', SELECTING: 'Escolha os episódios', DOWNLOADING: 'Baixando', PAUSED: 'Pausado', COMPLETED: 'Concluído', ERROR: 'Erro',
 }
 
-/** Lê o stream SSE com fetch para poder enviar o cabeçalho Authorization (EventSource não permite). */
-function useDownloadsStream(onData: (d: Download[]) => void) {
-  useEffect(() => {
-    const ctrl = new AbortController()
-    let stopped = false
-    const loop = async () => {
-      while (!stopped) {
-        try {
-          const res = await fetch('/api/downloads/stream', { headers: authHeaders(), signal: ctrl.signal })
-          if (!res.body) throw new Error('sem corpo')
-          const reader = res.body.getReader()
-          const dec = new TextDecoder()
-          let buf = ''
-          for (;;) {
-            const { done, value } = await reader.read()
-            if (done) break
-            buf += dec.decode(value, { stream: true })
-            let i
-            while ((i = buf.indexOf('\n\n')) >= 0) {
-              const block = buf.slice(0, i)
-              buf = buf.slice(i + 2)
-              const data = block.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('')
-              if (data) onData(JSON.parse(data))
-            }
-          }
-        } catch { /* reconecta abaixo */ }
-        if (!stopped) await new Promise((r) => setTimeout(r, 3000))
-      }
-    }
-    loop()
-    return () => { stopped = true; ctrl.abort() }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-}
 
 function FilePicker({ d, onClose }: { d: Download; onClose: () => void }) {
   const toast = useToast()
@@ -105,11 +72,10 @@ function FilePicker({ d, onClose }: { d: Download; onClose: () => void }) {
 }
 
 export default function Downloads() {
-  const [list, setList] = useState<Download[] | null>(null)
+  const list = useDownloads()
   const toast = useToast()
   const [picker, setPicker] = useState<Download | null>(null)
   const prompted = useRef<Set<number>>(new Set())
-  useDownloadsStream(setList)
 
   // abre o seletor sozinho quando um download fica pronto para a escolha dos episódios
   useEffect(() => {
