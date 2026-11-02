@@ -14,7 +14,7 @@ const audioLabel = (a: AudioTrack) => `${langName(a.language)}${a.title ? ' — 
 const subLabel = (s: SubTrack) =>
   `${langName(s.language)}${s.language === 'por' && /brazil/i.test(s.title ?? '') ? ' (PT-BR)' : ''}${s.title ? ' — ' + s.title : ''}${s.textBased ? '' : ' [imagem, indisponível]'}`
 
-const ctl = 'grid h-10 w-10 shrink-0 place-items-center rounded-full text-white transition hover:bg-white/15 active:bg-white/25'
+const ctl = 'grid h-9 w-9 shrink-0 sm:h-10 sm:w-10 place-items-center rounded-full text-white transition hover:bg-white/15 active:bg-white/25'
 
 function MenuGroup({ items, onPick }: { items: { key: number; label: string; on: boolean; disabled?: boolean }[]; onPick: (k: number) => void }) {
   return (
@@ -382,19 +382,19 @@ export default function Watch() {
           style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}>
           <input type="range" min={0} max={Math.max(1, Math.floor(duration))} value={Math.floor(abs)} onChange={(e) => seek(Number(e.target.value))}
             className="seek mb-1 h-5 w-full cursor-pointer accent-accent-500" aria-label="Posição" />
-          <div className="flex items-center gap-0.5 text-sm sm:gap-1">
+          <div className="flex min-w-0 items-center gap-0.5 text-sm sm:gap-1">
             <button onClick={toggle} className={ctl} aria-label="Reproduzir/Pausar">{playing ? <Pause size={22} fill="white" /> : <Play size={22} fill="white" />}</button>
             <button onClick={() => seek(abs - 10)} className={ctl} title="Voltar 10s (←)" aria-label="Voltar 10 segundos"><RotateCcw size={20} /></button>
             <button onClick={() => seek(abs + 10)} className={ctl} title="Avançar 10s (→)" aria-label="Avançar 10 segundos"><RotateCw size={20} /></button>
-            <span className="ml-1 whitespace-nowrap text-xs tabular-nums text-zinc-300 sm:text-sm">{fmt(abs)} / {fmt(duration)}</span>
+            <span className="ml-1 min-w-0 truncate whitespace-nowrap text-xs tabular-nums text-zinc-300 sm:text-sm">{fmt(abs)} / {fmt(duration)}</span>
             {!touch && (
-              <span className="ml-2 flex items-center gap-1">
+              <span className="ml-2 hidden items-center gap-1 sm:flex">
                 <button onClick={() => setMuted(!muted)} className={ctl} title="Mudo (m)" aria-label="Mudo">{muted || volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}</button>
                 <input type="range" min={0} max={1} step={0.05} value={muted ? 0 : volume} onChange={(e) => { setVolume(Number(e.target.value)); setMuted(false) }} className="w-20 accent-accent-500" aria-label="Volume" />
               </span>
             )}
-            <span className="ml-auto flex items-center gap-0.5 sm:gap-1">
-              {next && <button onClick={() => nav('/watch/' + next.id)} className="flex h-10 items-center gap-1 rounded-full px-3 text-xs font-semibold hover:bg-white/15 active:bg-white/25">Próximo<SkipForward size={16} /></button>}
+            <span className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
+              {next && <button onClick={() => nav('/watch/' + next.id)} title="Próximo episódio" aria-label="Próximo episódio" className="flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3"><span className="hidden sm:inline">Próximo</span><SkipForward size={16} /></button>}
               <button onClick={() => setMenu((m) => !m)} className={ctl} title="Áudio, legenda e velocidade" aria-label="Configurações"><Settings size={20} /></button>
               <button onClick={fullscreen} className={ctl} title="Tela cheia (f)" aria-label="Tela cheia">{expanded ? <Minimize size={20} /> : <Maximize size={20} />}</button>
             </span>
