@@ -82,7 +82,7 @@ public class LibraryService {
 
     public List<LibraryFile> list(String kind) {
         List<LibraryFile> out = new ArrayList<>();
-        for (StorageLocation loc : locations.findAll()) {
+        for (StorageLocation loc : storage.all()) {
             if (kind != null && !kind.isBlank() && !loc.getKind().equalsIgnoreCase(kind)) continue;
             Path base = Path.of(loc.getPath());
             if (!Files.isDirectory(base)) continue;

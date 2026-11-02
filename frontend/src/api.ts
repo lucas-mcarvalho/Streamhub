@@ -17,7 +17,7 @@ export type Release = {
 export type Usage = { total: number; free: number; used: number }
 export type Location = {
   id: number; name: string; path: string; kind: string; isDefault: boolean; exists: boolean; writable: boolean
-  usage: Usage; percentUsed: number; lowSpace: boolean
+  usage: Usage; percentUsed: number; lowSpace: boolean; offline: boolean
 }
 export type Disk = { name: string; fsType: string; rootIndex: number; relativePath: string; usage: Usage; writable: boolean }
 export type Root = { index: number; path: string; exists: boolean; usage: Usage }

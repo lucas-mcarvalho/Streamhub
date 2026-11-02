@@ -95,6 +95,7 @@ public class DownloadService {
         String kind = r.kind() == null ? "MOVIE" : r.kind().toUpperCase();
         String source = validateSource(r);
         StorageLocation loc = storage.pick(r.locationId(), kind);
+        storage.requireOnline(loc);
         Path dest = storage.resolveDestination(loc, r.relativePath());
         try {
             Files.createDirectories(dest);

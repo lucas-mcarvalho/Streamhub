@@ -164,13 +164,14 @@ export default function Storage() {
             </div>
             <div className="my-3"><Bar percent={l.percentUsed} warn={l.lowSpace} /></div>
             <div className="text-xs text-zinc-400">{fmtBytes(l.usage.free)} livres de {fmtBytes(l.usage.total)}</div>
-            {!l.exists && <p className="mt-1 text-xs text-red-400">A pasta não existe no servidor.</p>}
-            {l.exists && !l.writable && <p className="mt-1 text-xs text-red-400">Sem permissão de gravação.</p>}
+            {l.offline && <p className="mt-1 text-xs text-red-400">💽 Disco desconectado: o espaço mostrado é da memória do servidor, não do disco. Reconecte o disco ou remova esta pasta da lista.</p>}
+            {!l.offline && !l.exists && <p className="mt-1 text-xs text-red-400">A pasta não existe no servidor.</p>}
+            {!l.offline && l.exists && !l.writable && <p className="mt-1 text-xs text-red-400">Sem permissão de gravação.</p>}
             {l.lowSpace && <p className="mt-1 text-xs text-amber-400">⚠ Pouco espaço livre — novos downloads podem ser bloqueados.</p>}
             <div className="mt-3 flex gap-2">
               <button className={btnGhost} onClick={() => act(() => api(`/storage/locations/${l.id}/test`, { method: 'POST' }), 'Pasta existe e aceita gravação')}>Testar</button>
               {!l.isDefault && <button className={btnGhost} onClick={() => act(() => api(`/storage/locations/${l.id}/default`, { method: 'POST' }), 'Padrão atualizado')}>Tornar padrão</button>}
-              <button className={btnGhost} onClick={() => confirm('Remover o registro? Os arquivos não são apagados.') && act(() => api(`/storage/locations/${l.id}`, { method: 'DELETE' }), 'Removido')}>Remover</button>
+              <button className={btnGhost + ' ml-auto !text-red-400'} onClick={() => confirm(`Remover "${l.name}" da lista de locais de download?\n\nOs arquivos no disco NÃO são apagados.`) && act(() => api(`/storage/locations/${l.id}`, { method: 'DELETE' }), 'Local removido da lista')}>🗑 Remover da lista</button>
             </div>
           </div>
         ))}
