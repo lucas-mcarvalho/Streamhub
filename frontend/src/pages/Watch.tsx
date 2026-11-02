@@ -82,6 +82,10 @@ export default function Watch() {
   const [showUi, setShowUi] = useState(true)
   const [files, setFiles] = useState<LibraryFile[]>([])
   const [menu, setMenu] = useState(false)
+  const [reload, setReload] = useState(0)
+  const stallSince = useRef<number | null>(null)
+  const healthySince = useRef<number | null>(null)
+  const retries = useRef(0)
   const [tab, setTab] = useState<'audio' | 'sub' | 'rate'>('sub')
   const [fs, setFs] = useState(false)
   const [fake, setFake] = useState(false)
@@ -133,8 +137,8 @@ export default function Watch() {
 
   const src = token
     ? mode === 'direct'
-      ? `/api/library/stream/${id}?token=${encodeURIComponent(token)}`
-      : `/api/library/stream/${id}/transcode?token=${encodeURIComponent(token)}&start=${Math.floor(offset)}&audio=${audio}`
+      ? `/api/library/stream/${id}?token=${encodeURIComponent(token)}&r=${reload}`
+      : `/api/library/stream/${id}/transcode?token=${encodeURIComponent(token)}&start=${Math.floor(offset)}&audio=${audio}&r=${reload}`
     : undefined
 
   // salva posição
@@ -142,6 +146,36 @@ export default function Watch() {
     const t = setInterval(() => { if (playing && abs > 0) { localStorage.setItem(posKey, String(abs)); localStorage.setItem('streamhub.last.' + id, String(Date.now())); localStorage.removeItem('streamhub.done.' + id) } }, 5000)
     return () => clearInterval(t)
   }, [playing, abs, posKey, id])
+
+  // travou (sem dados por vários segundos) ou o fluxo acabou antes da hora: reabre o vídeo na posição atual,
+  // o mesmo que voltar 10 s à mão
+  const recover = () => {
+    if (retries.current >= 5) { setErr('A reprodução travou várias vezes seguidas. Verifique a conexão com o servidor e tente de novo.'); return }
+    retries.current++
+    if (mode === 'transcode') { setOffset(abs); setCur(0) } else pending.current = abs
+    setWaiting(true)
+    setReload((r) => r + 1)
+  }
+  const recoverRef = useRef(recover)
+  recoverRef.current = recover
+
+  useEffect(() => {
+    const iv = window.setInterval(() => {
+      const v = video.current
+      if (!v || v.paused || v.ended) { stallSince.current = null; healthySince.current = null; return }
+      const now = Date.now()
+      if (v.readyState < 3) {
+        healthySince.current = null
+        stallSince.current ??= now
+        if (now - stallSince.current > 8000) { stallSince.current = null; recoverRef.current() }
+      } else {
+        stallSince.current = null
+        healthySince.current ??= now
+        if (now - healthySince.current > 20000) retries.current = 0
+      }
+    }, 1000)
+    return () => window.clearInterval(iv)
+  }, [])
 
   const seek = useCallback((t: number) => {
     const target = Math.max(0, Math.min(t, (info?.duration ?? t) - 1))
@@ -264,9 +298,12 @@ export default function Watch() {
             onLoadedMetadata={(e) => {
               if (pending.current != null && mode === 'direct') { e.currentTarget.currentTime = pending.current; pending.current = null }
             }}
-            onEnded={() => { localStorage.removeItem(posKey); localStorage.setItem('streamhub.done.' + id, '1'); if (next) nav('/watch/' + next.id) }}
+            onEnded={() => {
+              if (mode === 'transcode' && duration > 0 && abs < duration - 10 && retries.current < 5) { recover(); return } // fluxo cortado antes do fim
+              localStorage.removeItem(posKey); localStorage.setItem('streamhub.done.' + id, '1'); if (next) nav('/watch/' + next.id) }}
             onError={() => {
               if (mode === 'direct') { setErr(undefined); setOffset(abs); setCur(0); setMode('transcode') }
+              else if (abs > 0 && retries.current < 5) recover()
               else setErr('Não foi possível reproduzir este arquivo.')
             }} />
         )}
