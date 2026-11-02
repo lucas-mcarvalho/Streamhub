@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Check, Loader2, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SkipForward, Volume2, VolumeX } from 'lucide-react'
-import { api, type AudioTrack, type LibraryFile, type MediaInfo, type SubTrack } from '../api'
+import { api, type AudioTrack, type GuideEpisode, type LibraryFile, type MediaInfo, type SubTrack } from '../api'
 import { Notice } from '../components/ui'
-
-type Cue = { start: number; end: number; text: string }
+import { parseVtt, subtitleAt, transcodeStart, type Cue } from '../lib/subtitles'
 
 const LANGS: Record<string, string> = {
   por: 'Português', eng: 'Inglês', jpn: 'Japonês', spa: 'Espanhol', fre: 'Francês', ger: 'Alemão', ita: 'Italiano',
@@ -36,24 +35,6 @@ function fmt(t: number) {
   return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0')
 }
 
-function parseTime(s: string) {
-  const p = s.trim().split(':').map(parseFloat)
-  return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1]
-}
-
-function parseVtt(text: string): Cue[] {
-  const cues: Cue[] = []
-  for (const block of text.replace(/\r/g, '').split(/\n\n+/)) {
-    const lines = block.split('\n')
-    const i = lines.findIndex((l) => l.includes('-->'))
-    if (i < 0) continue
-    const [a, b] = lines[i].split('-->')
-    const body = lines.slice(i + 1).join('\n').replace(/<[^>]+>/g, '').replace(/\{\\[^}]*\}/g, '').trim()
-    if (body) cues.push({ start: parseTime(a), end: parseTime(b.trim().split(' ')[0]), text: body })
-  }
-  return cues
-}
-
 const coarse = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
 
 export default function Watch() {
@@ -74,6 +55,13 @@ export default function Watch() {
   const [audio, setAudio] = useState(0)
   const [subIdx, setSubIdx] = useState(-1)
   const [cues, setCues] = useState<Cue[]>([])
+  const [subtitleDelay, setSubtitleDelay] = useState(0)
+  const [subtitleText, setSubtitleText] = useState('')
+  const changeSubtitleDelay = (value: number) => {
+    const delay = Math.round(Math.max(-120, Math.min(120, value)) * 10) / 10
+    setSubtitleDelay(delay)
+    try { localStorage.setItem('streamhub.subtitleDelay.' + id, String(delay)) } catch { /* armazenamento indisponível */ }
+  }
   const [playing, setPlaying] = useState(false)
   const [waiting, setWaiting] = useState(true)
   const [volume, setVolume] = useState(1)
@@ -99,6 +87,19 @@ export default function Watch() {
   const abs = mode === 'transcode' ? offset + cur : cur
   const duration = info?.duration || video.current?.duration || 0
   const file = files.find((f) => f.id === id)
+  // títulos dos episódios (TMDB), carregados uma vez por título; sem eles fica só o número
+  const [guide, setGuide] = useState<GuideEpisode[]>([])
+  useEffect(() => {
+    setGuide([])
+    if (!file || file.kind === 'MOVIE') return
+    let dead = false
+    api<GuideEpisode[]>(`/catalog/episode-guide?title=${encodeURIComponent(file.group)}&kind=${file.kind}`)
+      .then((g) => { if (!dead) setGuide(g) }).catch(() => {})
+    return () => { dead = true }
+  }, [file?.group, file?.kind]) // eslint-disable-line react-hooks/exhaustive-deps
+  const episodeTitle = file?.episode == null ? undefined
+    : guide.find((e) => (file.season != null ? e.season === file.season && e.number === file.episode : e.absolute === file.episode))?.name
+  const episodeLabel = file?.season != null ? `T${file.season} · Episódio ${file.episode}` : file?.episode != null ? `Episódio ${file.episode}` : ''
   const next = useMemo(() => {
     const i = files.findIndex((f) => f.id === id)
     return i >= 0 && files[i + 1]?.group === files[i].group ? files[i + 1] : undefined
@@ -106,9 +107,14 @@ export default function Watch() {
 
   // carrega informações, token e lista da biblioteca
   useEffect(() => {
+    let dead = false
+    setSubtitleText('')
+    const savedDelay = Number(localStorage.getItem('streamhub.subtitleDelay.' + id))
+    setSubtitleDelay(Number.isFinite(savedDelay) ? Math.max(-120, Math.min(120, savedDelay)) : 0)
     setInfo(undefined); setToken(undefined); setErr(undefined); setCues([]); setCur(0); setOffset(0); setAudio(0); setWaiting(true)
     Promise.all([api<MediaInfo>(`/library/${id}/info`), api<{ token: string }>(`/library/${id}/token`)])
       .then(([i, t]) => {
+        if (dead) return
         const saved = Number(localStorage.getItem(posKey))
         pending.current = saved > 5 && saved < i.duration - 30 ? saved : null
         setMode(i.directPlay ? 'direct' : 'transcode')
@@ -119,8 +125,9 @@ export default function Watch() {
         localStorage.setItem('streamhub.dur.' + id, String(i.duration))
         setInfo(i); setToken(t.token)
       })
-      .catch((e) => setErr(e.message))
-    api<LibraryFile[]>('/library').then(setFiles).catch(() => {})
+      .catch((e) => { if (!dead) setErr(e.message) })
+    api<LibraryFile[]>('/library').then((list) => { if (!dead) setFiles(list) }).catch(() => {})
+    return () => { dead = true }
   }, [id, posKey])
 
   // legenda selecionada
@@ -138,8 +145,21 @@ export default function Watch() {
   const src = token
     ? mode === 'direct'
       ? `/api/library/stream/${id}?token=${encodeURIComponent(token)}&r=${reload}`
-      : `/api/library/stream/${id}/transcode?token=${encodeURIComponent(token)}&start=${Math.floor(offset)}&audio=${audio}&r=${reload}`
+      : `/api/library/stream/${id}/transcode?token=${encodeURIComponent(token)}&start=${transcodeStart(offset)}&audio=${audio}&r=${reload}`
     : undefined
+
+  // Read the actual media clock on each animation frame, including pauses, seeks and speed changes.
+  useEffect(() => {
+    let frame = 0
+    const update = () => {
+      const v = video.current
+      const time = v ? v.currentTime + (mode === 'transcode' ? Number(transcodeStart(offset)) : 0) : 0
+      setSubtitleText(v && v.readyState >= 2 ? subtitleAt(cues, time, subtitleDelay) : '')
+      frame = window.requestAnimationFrame(update)
+    }
+    update()
+    return () => window.cancelAnimationFrame(frame)
+  }, [cues, subtitleDelay, mode, offset, src])
 
   // salva posição
   useEffect(() => {
@@ -271,7 +291,6 @@ export default function Watch() {
     }, 300)
   }
 
-  const cue = cues.find((c) => abs >= c.start && abs < c.end)
   const uiVisible = showUi || !playing
   const expanded = fs || fake
   const tabs = [
@@ -286,7 +305,7 @@ export default function Watch() {
     <div>
       <div className="mb-2 flex items-center justify-between text-sm">
         <Link to="/library" className="flex items-center gap-1 text-zinc-400 hover:text-white"><ArrowLeft size={16} />Biblioteca</Link>
-        <span className="truncate pl-4 text-zinc-300">{file?.group} {file?.season != null ? `· T${file.season} E${file.episode}` : file?.episode != null ? `· Episódio ${file.episode}` : ''}</span>
+        <span className="line-clamp-2 pl-4 text-right text-zinc-300 sm:truncate">{file?.group}{episodeLabel && ` · ${episodeLabel}`}{episodeTitle && <span className="text-zinc-400"> — {episodeTitle}</span>}</span>
       </div>
       <div ref={box} onPointerMove={(e) => { if (e.pointerType === 'mouse') poke() }} onMouseLeave={() => !touch && playing && !menu && setShowUi(false)}
         className={`overflow-hidden bg-black ${fake ? 'fixed inset-0 z-[100] h-[100dvh] w-screen' : fs ? 'h-full w-full' : 'relative mx-auto aspect-video max-h-[calc(100dvh-5.5rem)] w-full rounded-lg'} ${uiVisible ? '' : 'cursor-none'}`}>
@@ -318,14 +337,17 @@ export default function Watch() {
             <Play size={30} fill="white" className="ml-1" />
           </button>
         )}
-        {cue && (
+        {subtitleText && (
           <div className={`pointer-events-none absolute inset-x-0 flex justify-center px-3 text-center transition-all sm:px-6 ${uiVisible ? 'bottom-24 sm:bottom-24' : 'bottom-6 sm:bottom-8'}`}>
-            <span className="whitespace-pre-line rounded bg-black/55 px-2 py-1 text-[15px] font-medium leading-snug text-white [text-shadow:0_1px_3px_#000] sm:text-lg md:text-2xl">{cue.text}</span>
+            <span className="whitespace-pre-line rounded bg-black/55 px-2 py-1 text-[15px] font-medium leading-snug text-white [text-shadow:0_1px_3px_#000] sm:text-lg md:text-2xl">{subtitleText}</span>
           </div>
         )}
-        {expanded && (
-          <div className={`pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/80 to-transparent px-4 pb-8 pt-3 text-sm font-semibold transition-opacity ${uiVisible ? 'opacity-100' : 'opacity-0'}`} style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}>
-            {file?.group} {file?.season != null ? `· T${file.season} E${file.episode}` : file?.episode != null ? `· Episódio ${file.episode}` : ''}
+        {file && (
+          <div className={`pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/80 to-transparent px-4 pb-10 pt-3 transition-opacity sm:block sm:px-6 ${expanded ? '' : 'hidden'} ${uiVisible ? 'opacity-100' : 'opacity-0'}`} style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}>
+            <div className="truncate text-xs font-medium text-zinc-300 sm:text-sm">{file.group}</div>
+            <div className="truncate text-base font-semibold text-white [text-shadow:0_1px_3px_#000] sm:text-xl">
+              {episodeLabel ? <><span className="text-accent-400">{episodeLabel}</span>{episodeTitle && ` — ${episodeTitle}`}</> : file.name}
+            </div>
           </div>
         )}
         {menu && info && (
@@ -337,7 +359,21 @@ export default function Watch() {
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
               {activeTab === 'audio' && <MenuGroup items={info.audio.map((a) => ({ key: a.index, label: audioLabel(a), on: a.index === audio }))} onPick={(k) => { changeAudio(Number(k)); setMenu(false) }} />}
-              {activeTab === 'sub' && <MenuGroup items={[{ key: -1, label: 'Sem legenda', on: subIdx === -1 }, ...info.subtitles.map((x) => ({ key: x.index, label: subLabel(x), on: x.index === subIdx, disabled: !x.textBased }))]} onPick={(k) => { setSubIdx(Number(k)); setMenu(false) }} />}
+              {activeTab === 'sub' && <>
+                <MenuGroup items={[{ key: -1, label: 'Sem legenda', on: subIdx === -1 }, ...info.subtitles.map((x) => ({ key: x.index, label: subLabel(x), on: x.index === subIdx, disabled: !x.textBased }))]} onPick={(k) => setSubIdx(Number(k))} />
+                {subIdx >= 0 && <div className="mt-2 space-y-2 border-t border-white/10 px-3 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span>Sincronização</span>
+                    <output className="tabular-nums" aria-live="polite">{subtitleDelay > 0 ? '+' : ''}{subtitleDelay.toFixed(1)} s</output>
+                  </div>
+                  <div className="flex gap-2">
+                    <button className="flex-1 rounded-lg bg-white/10 px-2 py-2 hover:bg-white/20" aria-label="Adiantar legenda em 0,5 segundo" onClick={() => changeSubtitleDelay(subtitleDelay - 0.5)}>Adiantar 0,5 s</button>
+                    <button className="flex-1 rounded-lg bg-white/10 px-2 py-2 hover:bg-white/20" aria-label="Atrasar legenda em 0,5 segundo" onClick={() => changeSubtitleDelay(subtitleDelay + 0.5)}>Atrasar 0,5 s</button>
+                  </div>
+                  <button className="text-xs text-accent-400 hover:underline" onClick={() => changeSubtitleDelay(0)}>Restaurar sincronização</button>
+                  <p className="text-xs text-zinc-400">Se a fala antiga continua na tela, use Adiantar. Ajuste salvo para este episódio.</p>
+                </div>}
+              </>}
               {activeTab === 'rate' && <MenuGroup items={[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => ({ key: r, label: r === 1 ? 'Normal' : r + 'x', on: r === rate }))} onPick={(k) => { setRate(Number(k)); setMenu(false) }} />}
             </div>
           </div>

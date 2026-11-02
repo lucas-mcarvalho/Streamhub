@@ -5,6 +5,7 @@ import { Clapperboard, Download, Film, HardDrive, Home, Library, LogOut, type Lu
 import { auth } from '../api'
 import { useTheme } from '../theme'
 import Footer from './Footer'
+import { useDownloads } from './DownloadsProvider'
 
 type Item = { to: string; label: string; icon: LucideIcon; end?: boolean }
 
@@ -58,7 +59,16 @@ function Logo({ anime }: { anime?: boolean }) {
   )
 }
 
+function DownloadIcon({ count }: { count: number }) {
+  return <span className="relative inline-flex shrink-0" role="img" aria-label={`Downloads: ${count} em andamento`}>
+    <Download size={16} aria-hidden="true" />
+    {count > 0 && <span aria-hidden="true" className="absolute -right-2.5 -top-2.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-600 px-1 text-[10px] font-bold leading-none text-white ring-2 ring-canvas">{count > 99 ? '99+' : count}</span>}
+  </span>
+}
+
 export default function Layout({ onLogout }: { onLogout: () => void }) {
+  const downloads = useDownloads()
+  const activeDownloads = downloads?.filter((d) => d.status === 'DOWNLOADING' || d.status === 'QUEUED').length ?? 0
   const { theme } = useTheme()
   const loc = useLocation()
   const go = useNavigate()
@@ -108,7 +118,7 @@ export default function Layout({ onLogout }: { onLogout: () => void }) {
           <div className="flex items-center justify-end gap-1.5">
             <ModeSwitch />
             {tools.map((t) => (
-              <Link key={t.to} to={t.to} title={t.label} className={`grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-black/40 text-zinc-300 backdrop-blur transition hover:border-accent-500 hover:text-accent-400 ${t.hideMobile ? 'hidden md:grid' : 'hidden sm:grid'}`}><t.icon size={16} /></Link>
+              <Link key={t.to} to={t.to} title={t.label} className={`grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-black/40 text-zinc-300 backdrop-blur transition hover:border-accent-500 hover:text-accent-400 ${t.hideMobile ? 'hidden md:grid' : t.to === '/downloads' ? 'grid' : 'hidden sm:grid'}`}>{t.to === '/downloads' ? <DownloadIcon count={activeDownloads} /> : <t.icon size={16} />}</Link>
             ))}
             <button onClick={logout} title="Sair" className="hidden h-9 w-9 place-items-center rounded-full border border-white/10 bg-black/40 text-zinc-300 backdrop-blur transition hover:border-accent-500 hover:text-accent-400 sm:grid"><LogOut size={16} /></button>
           </div>
@@ -131,7 +141,7 @@ export default function Layout({ onLogout }: { onLogout: () => void }) {
               <NavLink key={n.to} to={n.to} end={n.end} className="relative whitespace-nowrap px-3 py-1.5 font-medium">
                 {({ isActive }) => (
                   <>
-                    <span className={`relative z-10 ${isActive ? 'text-white' : 'text-zinc-400 hover:text-white'}`}>{n.label}</span>
+                    <span className={`relative z-10 inline-flex items-center gap-2 ${isActive ? 'text-white' : 'text-zinc-400 hover:text-white'}`}>{n.to === '/downloads' && <DownloadIcon count={activeDownloads} />}{n.label}</span>
                     {isActive && <motion.span layoutId="top-underline" className="absolute inset-x-2 -bottom-[13px] h-0.5 rounded-full bg-accent-500" />}
                   </>
                 )}

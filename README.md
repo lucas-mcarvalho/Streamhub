@@ -51,7 +51,11 @@ Aplicação web para **pesquisar, baixar, organizar e assistir filmes, séries e
 
 **Biblioteca e player próprio**
 - Grade de pôsteres com nota, gêneros e progresso por episódio; painel de detalhes por título; "Continuar assistindo".
+- Tela **Ver episódios** por título: grade com capa, número e nome de cada episódio, selo de **Assistido**, progresso, seletor de temporada, busca e ordem; dá para marcar/desmarcar como assistido.
+- O player mostra o **número e o título do episódio** em reprodução.
 - Player com **troca de faixa de áudio**, **legendas** (PT-BR escolhida automaticamente quando existe), velocidade, tela cheia, atalhos de teclado e **próximo episódio**.
+- Em **Configurações do player > Legenda**, use **Adiantar/Atrasar 0,5 s** para sincronizar a legenda. O ajuste fica salvo por episódio neste navegador; **Restaurar sincronização** volta a zero. Legendas simultâneas são exibidas juntas.
+- O ícone de **Downloads** mostra em tempo real quantos downloads estão baixando ou aguardando na fila, nos dois modos da interface. Pausados, concluídos, com erro e aguardando escolha de episódios ficam fora do contador.
 - **Conversão no servidor (ffmpeg)** para formatos que o navegador não toca.
 - Exclusão de arquivos pela biblioteca.
 
