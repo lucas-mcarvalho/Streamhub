@@ -104,6 +104,14 @@ public class DownloadService {
         if (!Files.isWritable(dest)) throw new ApiException(HttpStatus.FORBIDDEN, "NO_PERMISSION", "Sem permissão de gravação no destino");
         storage.requireSpace(dest, r.sizeBytes());
 
+        // o qBittorrent ignora em silêncio um torrent que já existe; nesse caso reaproveita o que já está lá
+        String infoHash = TorrentHash.of(source);
+        if (infoHash != null) {
+            Map<String, Object> existing = qbit.info().stream()
+                .filter(t -> infoHash.equalsIgnoreCase(J.str(t.get("hash")))).findFirst().orElse(null);
+            if (existing != null) return reuse(r, kind, source, loc, dest, infoHash);
+        }
+
         Download d = new Download();
         d.setTitle(r.title());
         d.setKind(kind);
@@ -124,6 +132,46 @@ public class DownloadService {
             repo.delete(d);
             throw e;
         }
+        d = repo.save(d);
+        publish();
+        return DownloadView.of(d);
+    }
+
+    /** O torrent já está no qBittorrent: reabre o download existente (ou adota o torrent órfão) em vez de duplicar. */
+    private DownloadView reuse(StartRequest r, String kind, String source, StorageLocation loc, Path dest, String hash) {
+        Download d = repo.findAll().stream().filter(x -> hash.equalsIgnoreCase(x.getHash())).findFirst().orElse(null);
+        if (d == null) {
+            d = new Download();
+            d.setTitle(r.title());
+            d.setKind(kind);
+            d.setCatalogRef(r.catalogRef());
+            d.setIndexer(r.indexer());
+            d.setSourceUrl(source);
+            d.setLocationId(loc.getId());
+            d.setRelativePath(r.relativePath() == null ? "" : r.relativePath());
+            d.setSavePath(dest.toString());
+            d.setSizeBytes(r.sizeBytes());
+            d.setTag("pending");
+            d = repo.save(d);
+            d.setTag("sh-" + d.getId());
+            d.setHash(hash);
+            qbit.addTags(hash, d.getTag());
+        }
+        d.setErrorMessage(null);
+        d.setCompletedAt(null);
+        if (Boolean.TRUE.equals(r.chooseFiles())) {
+            qbit.pause(hash);
+            d.setStatus("SELECTING");
+            d.setAwaitingSelection(false);
+        } else {
+            List<Integer> all = new java.util.ArrayList<>();
+            for (int i = 0; i < qbit.files(hash).size(); i++) all.add(i);
+            qbit.setFilePriority(hash, all, 1);
+            qbit.resume(hash);
+            d.setStatus("DOWNLOADING");
+        }
+        d.setDlSpeed(0);
+        d.setEtaSeconds(null);
         d = repo.save(d);
         publish();
         return DownloadView.of(d);
@@ -250,7 +298,7 @@ public class DownloadService {
         if (t == null) {
             if (d.getHash() != null || d.getCreatedAt().isBefore(LocalDateTime.now().minusSeconds(90))) {
                 d.setStatus("ERROR");
-                d.setErrorMessage("Torrent não encontrado no qBittorrent (removido ou rejeitado)");
+                d.setErrorMessage("Torrent não encontrado no qBittorrent (removido, rejeitado ou já existente com outro nome)");
                 repo.save(d);
             }
             return;

@@ -126,6 +126,14 @@ public class QbitClient {
             .contentType(MediaType.APPLICATION_FORM_URLENCODED).body(form).retrieve().toBodilessEntity());
     }
 
+    public void addTags(String hash, String tag) {
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("hashes", hash);
+        form.add("tags", tag);
+        call(r -> r.post().uri(Http.uri(base(), "/api/v2/torrents/addTags"))
+            .contentType(MediaType.APPLICATION_FORM_URLENCODED).body(form).retrieve().toBodilessEntity());
+    }
+
     public void pause(String hash) { hashesAction("stop", "pause", hash); }
 
     public void resume(String hash) { hashesAction("start", "resume", hash); }
