@@ -134,6 +134,22 @@ public class QbitClient {
             .contentType(MediaType.APPLICATION_FORM_URLENCODED).body(form).retrieve().toBodilessEntity());
     }
 
+    /** Muda a pasta de destino do torrent (usado quando o disco foi remontado com outro nome). */
+    public void setLocation(String hash, String location) {
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("hashes", hash);
+        form.add("location", location);
+        call(r -> r.post().uri(Http.uri(base(), "/api/v2/torrents/setLocation"))
+            .contentType(MediaType.APPLICATION_FORM_URLENCODED).body(form).retrieve().toBodilessEntity());
+    }
+
+    public void recheck(String hash) {
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("hashes", hash);
+        call(r -> r.post().uri(Http.uri(base(), "/api/v2/torrents/recheck"))
+            .contentType(MediaType.APPLICATION_FORM_URLENCODED).body(form).retrieve().toBodilessEntity());
+    }
+
     public void pause(String hash) { hashesAction("stop", "pause", hash); }
 
     public void resume(String hash) { hashesAction("start", "resume", hash); }

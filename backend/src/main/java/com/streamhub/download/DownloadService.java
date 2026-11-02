@@ -160,6 +160,7 @@ public class DownloadService {
         }
         d.setErrorMessage(null);
         d.setCompletedAt(null);
+        currentDestination(d);
         if (Boolean.TRUE.equals(r.chooseFiles())) {
             qbit.pause(hash);
             d.setStatus("SELECTING");
@@ -176,6 +177,25 @@ public class DownloadService {
         d = repo.save(d);
         publish();
         return DownloadView.of(d);
+    }
+
+    /**
+     * Destino atual do download. Se o disco foi remontado com outro nome, o caminho guardado ficou velho:
+     * recalcula pelo local registrado e avisa o qBittorrent, para o espaço e os arquivos serem os do disco certo.
+     */
+    private Path currentDestination(Download d) {
+        if (d.getLocationId() == null) return Path.of(d.getSavePath());
+        StorageLocation loc = storage.get(d.getLocationId());
+        storage.requireOnline(loc);
+        Path dest = storage.resolveDestination(loc, d.getRelativePath());
+        if (!dest.toString().equals(d.getSavePath())) {
+            if (d.getHash() != null) {
+                qbit.setLocation(d.getHash(), toQbitPath(dest));   // ao retomar, o qBittorrent confere os arquivos no lugar novo
+            }
+            d.setSavePath(dest.toString());
+            repo.save(d);
+        }
+        return dest;
     }
 
     public List<DownloadView> list() {
@@ -218,7 +238,7 @@ public class DownloadService {
         }
         List<FileEntry> all = files(id);
         long need = all.stream().filter(f -> selected.contains(f.index())).mapToLong(f -> (long) (f.size() * (1 - f.progress()))).sum();
-        storage.requireSpace(Path.of(d.getSavePath()), need);
+        storage.requireSpace(currentDestination(d), need);
         List<Integer> skip = all.stream().map(FileEntry::index).filter(i -> !selected.contains(i)).toList();
         qbit.setFilePriority(hash, selected, 1);
         qbit.setFilePriority(hash, skip, 0);
@@ -240,6 +260,7 @@ public class DownloadService {
 
     public void resume(long id) {
         Download d = get(id);
+        currentDestination(d);
         qbit.resume(hashOf(d));
         d.setStatus("DOWNLOADING");
         repo.save(d);
@@ -273,8 +294,8 @@ public class DownloadService {
         return switch (s == null ? "" : s) {
             case "error", "missingFiles" -> "ERROR";
             case "pausedDL", "stoppedDL" -> "PAUSED";
-            case "queuedDL" -> "QUEUED";
-            case "pausedUP", "stoppedUP", "uploading", "stalledUP", "queuedUP", "forcedUP", "checkingUP" ->
+            case "queuedDL", "checkingUP", "checkingDL", "checkingResumeData" -> "QUEUED";   // verificando arquivos
+            case "pausedUP", "stoppedUP", "uploading", "stalledUP", "queuedUP", "forcedUP" ->
                 progress >= 1.0 ? "COMPLETED" : "PAUSED";
             default -> "DOWNLOADING";
         };
