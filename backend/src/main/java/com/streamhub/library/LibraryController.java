@@ -50,6 +50,14 @@ public class LibraryController {
         return ResponseEntity.ok().contentType(type).body(new FileSystemResource(p));
     }
 
+    /** Quadro do vídeo na posição `t` (segundos): usado em "Continuar assistindo". */
+    @GetMapping("/{id}/thumb")
+    public ResponseEntity<byte[]> thumb(@PathVariable String id, @RequestParam(defaultValue = "0") double t,
+                                        @RequestParam(defaultValue = "480") int w) {
+        return ResponseEntity.ok().contentType(MediaType.IMAGE_JPEG).header("Cache-Control", "private, max-age=3600")
+            .body(service.thumbnail(id, t, w));
+    }
+
     @GetMapping("/{id}/info")
     public LibraryService.MediaInfo info(@PathVariable String id) { return service.info(id); }
 

@@ -17,7 +17,7 @@ export default function Home() {
   const anime = data?.find((s) => s.key === 'anime')?.items.find((i) => i.backdropUrl)
   const panels = [
     { to: '/cinema', title: 'Filmes & Séries', sub: 'Blockbusters, clássicos e as séries do momento', img: movie?.backdropUrl, icon: Clapperboard, tone: 'from-red-700/80', theme: 'cinema' },
-    { to: '/anime', title: 'Animes', sub: 'Notas, gêneros e temporadas direto do AniList', img: anime?.backdropUrl, icon: Swords, tone: 'from-blue-800/80', theme: 'anime' },
+    { to: '/anime', title: 'Animes', sub: 'Notas, gêneros e lançamentos direto do AniList', img: anime?.backdropUrl, icon: Swords, tone: 'from-blue-700/80', theme: 'anime' },
   ]
   return (
     <div>

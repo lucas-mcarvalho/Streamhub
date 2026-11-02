@@ -34,7 +34,7 @@ services:
       APP_ADMIN_USER: ${APP_ADMIN_USER:-admin}
       APP_ADMIN_PASSWORD: ${APP_ADMIN_PASSWORD:-admin}
       APP_SECRET: ${APP_SECRET:-change-me-in-production}
-      STORAGE_ALLOWED_ROOTS: /media,/hd1
+      STORAGE_ALLOWED_ROOTS: /media,/hd1,/disks
       TMDB_API_KEY: ${TMDB_API_KEY:-}
       PROWLARR_URL: http://prowlarr:9696
       SONARR_URL: http://sonarr:8989
@@ -49,6 +49,11 @@ services:
     volumes:
       - ${MEDIA_ROOT:-./media}:/media
       - ${EXTRA_STORAGE:-./media}:/hd1   # disco extra (HD externo); por padrão repete a pasta de mídia
+      - type: bind   # todos os discos montados no PC (pen drives, SSD/HD externos) aparecem em /disks, mesmo conectados depois
+        source: ${DISKS_DIR:-./disks}
+        target: /disks
+        bind:
+          propagation: rslave
       - ${DATA_ROOT:-./data}:/integrations:ro   # leitura automática das chaves de API (config.xml)
     ports:
       - "8080:8080"
@@ -100,6 +105,11 @@ services:
       - ${DATA_ROOT:-./data}/qbittorrent:/config
       - ${MEDIA_ROOT:-./media}:/media
       - ${EXTRA_STORAGE:-./media}:/hd1   # disco extra (HD externo); por padrão repete a pasta de mídia
+      - type: bind   # todos os discos montados no PC (pen drives, SSD/HD externos) aparecem em /disks, mesmo conectados depois
+        source: ${DISKS_DIR:-./disks}
+        target: /disks
+        bind:
+          propagation: rslave
     ports:
       - "8081:8080"
       - "6881:6881"

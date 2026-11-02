@@ -28,22 +28,27 @@ public class StorageService {
 
     public record RootView(int index, String path, boolean exists, Usage usage) {}
 
+    public record DiskView(String name, String fsType, int rootIndex, String relativePath, Usage usage, boolean writable) {}
+
     public record DirEntry(String name, String relativePath) {}
 
     public record LocationView(Long id, String name, String path, String kind, boolean isDefault, boolean exists,
-                               boolean writable, Usage usage, double percentUsed, boolean lowSpace) {}
+                               boolean writable, Usage usage, double percentUsed, boolean lowSpace, boolean offline) {}
 
     private final StorageLocationRepository repo;
     private final List<Path> roots = new ArrayList<>();
     private final long minFreeBytes;
+    private final Path disksDir;
 
     public StorageService(StorageLocationRepository repo,
                           @Value("${streamhub.storage.allowed-roots}") String allowedRoots,
+                          @Value("${streamhub.storage.disks-dir:/disks}") String disksDir,
                           @Value("${streamhub.storage.min-free-gb}") long minFreeGb) {
         this.repo = repo;
         for (String r : allowedRoots.split("[,;]")) {
             if (!r.isBlank()) roots.add(Path.of(r.trim()).toAbsolutePath().normalize());
         }
+        this.disksDir = Path.of(disksDir.trim()).toAbsolutePath().normalize();
         this.minFreeBytes = minFreeGb * 1024 * 1024 * 1024;
     }
 
@@ -72,6 +77,29 @@ public class StorageService {
         List<RootView> out = new ArrayList<>();
         for (int i = 0; i < roots.size(); i++) {
             out.add(new RootView(i, roots.get(i).toString(), Files.isDirectory(roots.get(i)), usage(roots.get(i))));
+        }
+        return out;
+    }
+
+    /** Discos montados no PC (visíveis em DISKS_DIR): só entram pastas que são ponto de montagem de outro dispositivo. */
+    public List<DiskView> disks() {
+        int idx = roots.indexOf(disksDir);
+        if (idx < 0 || !Files.isDirectory(disksDir)) return List.of();
+        String baseDev;
+        try { baseDev = Files.getFileStore(disksDir).name(); } catch (IOException e) { baseDev = ""; }
+        List<DiskView> out = new ArrayList<>();
+        try (Stream<Path> s = Files.list(disksDir)) {
+            for (Path p : s.filter(Files::isDirectory).sorted().toList()) {
+                try {
+                    var store = Files.getFileStore(p);
+                    boolean mounted = !store.name().equals(baseDev) || store.toString().startsWith(p + " (");
+                    if (!mounted || store.getTotalSpace() == 0) continue;
+                    out.add(new DiskView(p.getFileName().toString(), store.type(), idx,
+                        p.getFileName().toString(), usage(p), Files.isWritable(p)));
+                } catch (IOException ignored) { /* disco indisponível: ignora */ }
+            }
+        } catch (IOException e) {
+            return List.of();
         }
         return out;
     }
@@ -117,6 +145,79 @@ public class StorageService {
         }
     }
 
+    // ---------- disco desconectado / remontado com outro nome ----------
+
+    /** Pasta vazia que sobrou na memória (tmpfs) onde o disco deveria estar montado. */
+    private static boolean ramBacked(Path p) {
+        Path e = nearestExisting(p);
+        if (e == null) return false;
+        try {
+            String t = Files.getFileStore(e).type();
+            return t.equals("tmpfs") || t.equals("ramfs");
+        } catch (IOException ex) {
+            return false;
+        }
+    }
+
+    private Path externalRoot(Path p) {
+        return roots.stream().skip(1).filter(p::startsWith).findFirst().orElse(null);
+    }
+
+    /** Uma pasta de disco externo cujo disco não está montado de verdade (gravar ali escreveria na memória RAM). */
+    public boolean isOffline(Path p) {
+        return externalRoot(p) != null && ramBacked(p);
+    }
+
+    public void requireOnline(StorageLocation l) {
+        if (isOffline(Path.of(l.getPath()))) {
+            throw new ApiException(HttpStatus.CONFLICT, "DISK_OFFLINE",
+                "O disco da pasta \"" + l.getName() + "\" está desconectado. Conecte o disco ou escolha outra pasta.");
+        }
+    }
+
+    /**
+     * O sistema remonta discos removíveis com outro nome (HDEXTERNO, HDEXTERNO1, HDEXTERNO2...). Se a pasta salva
+     * ficou para trás, procura o mesmo disco (mesmo nome sem o número final, ou a mesma subpasta) já montado.
+     */
+    Path effective(Path p) {
+        Path ext = externalRoot(p);
+        if (ext == null) return p;
+        if (ext.equals(disksDir)) {
+            Path rel = disksDir.relativize(p);
+            if (rel.getNameCount() == 0) return p;
+            String first = rel.getName(0).toString();
+            Path firstDir = disksDir.resolve(first);
+            if (Files.isDirectory(firstDir) && !ramBacked(firstDir)) return p;
+            String base = first.replaceAll("\\d+$", "");
+            Path rest = rel.getNameCount() > 1 ? rel.subpath(1, rel.getNameCount()) : Path.of("");
+            for (DiskView d : disks()) {
+                if (d.name().replaceAll("\\d+$", "").equals(base)) return disksDir.resolve(d.name()).resolve(rest);
+            }
+            return p;
+        }
+        if (Files.isDirectory(ext) && !ramBacked(ext)) return p;
+        Path rest = ext.relativize(p);
+        List<Path> hits = disks().stream().map(d -> disksDir.resolve(d.name()).resolve(rest)).filter(Files::isDirectory).toList();
+        return hits.size() == 1 ? hits.get(0) : p;
+    }
+
+    private StorageLocation heal(StorageLocation l) {
+        Path now = Path.of(l.getPath());
+        Path fixed = effective(now);
+        if (!fixed.equals(now)) {
+            l.setPath(fixed.toString());
+            repo.save(l);
+        }
+        return l;
+    }
+
+    @Transactional
+    public List<StorageLocation> all() {
+        List<StorageLocation> out = repo.findAll();
+        out.forEach(this::heal);
+        return out;
+    }
+
     // ---------- locais registrados ----------
 
     public LocationView view(StorageLocation l) {
@@ -124,14 +225,16 @@ public class StorageService {
         boolean exists = Files.isDirectory(p);
         Usage u = usage(p);
         double pct = u.total() == 0 ? 0 : u.used() * 100.0 / u.total();
+        boolean offline = isOffline(p);
         return new LocationView(l.getId(), l.getName(), l.getPath(), l.getKind(), l.isDefaultLocation(), exists,
-            exists && Files.isWritable(p), u, pct, exists && u.free() < minFreeBytes);
+            exists && !offline && Files.isWritable(p), u, pct, exists && !offline && u.free() < minFreeBytes, offline);
     }
 
-    public List<LocationView> list() { return repo.findAll().stream().map(this::view).toList(); }
+    @Transactional
+    public List<LocationView> list() { return all().stream().map(this::view).toList(); }
 
     public StorageLocation get(long id) {
-        return repo.findById(id).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "NO_LOCATION", "Local de armazenamento não encontrado"));
+        return heal(repo.findById(id).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "NO_LOCATION", "Local de armazenamento não encontrado")));
     }
 
     @Transactional

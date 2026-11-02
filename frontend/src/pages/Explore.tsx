@@ -25,7 +25,7 @@ export default function Explore({ kind }: { kind: Kind }) {
   const [q, setQ] = useState('')
   const [term, setTerm] = useState('')
   const [genre, setGenre] = useState(params.get('genre') ?? '')
-  const [sort, setSort] = useState('POPULAR')
+  const [sort, setSort] = useState(params.get('sort') ?? 'POPULAR')
   const [page, setPage] = useState(1)
   const [items, setItems] = useState<CatalogItem[]>([])
   const [genres, setGenres] = useState<Genre[]>([])
@@ -34,7 +34,7 @@ export default function Explore({ kind }: { kind: Kind }) {
   const [more, setMore] = useState(true)
   const seq = useRef(0)
 
-  useEffect(() => { setGenre(params.get('genre') ?? ''); setSort('POPULAR'); setQ(''); setTerm('') }, [kind]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setGenre(params.get('genre') ?? ''); setSort(params.get('sort') ?? 'POPULAR'); setQ(''); setTerm('') }, [kind, params.get('sort')]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { api<Genre[]>('/catalog/genres?kind=' + kind).then(setGenres).catch(() => setGenres([])) }, [kind])
   useEffect(() => { const t = setTimeout(() => setTerm(q.trim()), 450); return () => clearTimeout(t) }, [q])
   useEffect(() => { setPage(1) }, [kind, term, genre, sort])
@@ -58,7 +58,7 @@ export default function Explore({ kind }: { kind: Kind }) {
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <div className="relative min-w-[220px] flex-1 md:max-w-sm">
           <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Buscar em ${title.toLowerCase()}…`}
+          <input autoFocus={params.has('search')} value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Buscar em ${title.toLowerCase()}…`}
             className="w-full rounded-full border border-line bg-surface/70 py-2 pl-9 pr-4 text-sm outline-none transition focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20" />
         </div>
         {!term && (

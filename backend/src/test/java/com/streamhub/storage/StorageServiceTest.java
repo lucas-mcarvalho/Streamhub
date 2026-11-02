@@ -15,7 +15,7 @@ class StorageServiceTest {
     @TempDir
     Path tmp;
 
-    private StorageService service() { return new StorageService(null, tmp.toString(), 1); }
+    private StorageService service() { return new StorageService(null, tmp.toString(), "/disks", 1); }
 
     @Test
     void resolvesInsideBase() {

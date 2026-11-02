@@ -23,6 +23,12 @@ function DownloadModal({ release, title, kind, catalogRef, relDefault, onClose }
   const chosen = locs.data?.find((l) => String(l.id) === locId) ?? locs.data?.find((l) => l.kind === kind && l.isDefault) ?? locs.data?.find((l) => l.kind === 'GENERAL' && l.isDefault)
   const enough = chosen ? chosen.usage.free > release.sizeBytes : false
 
+  const removeChosen = async () => {
+    if (!chosen || !confirm(`Remover "${chosen.name}" da lista de locais de download?\n\nOs arquivos no disco NÃO são apagados.`)) return
+    try { await api(`/storage/locations/${chosen.id}`, { method: 'DELETE' }); setLocId(''); locs.reload(); toast('Local removido da lista') }
+    catch (e) { toast((e as Error).message, 'err') }
+  }
+
   const start = async () => {
     setBusy(true)
     try {
@@ -45,8 +51,10 @@ function DownloadModal({ release, title, kind, catalogRef, relDefault, onClose }
         <>
           <label className="text-xs text-zinc-400">Disco / pasta de destino</label>
           <select className={input + ' mb-2'} value={chosen ? String(chosen.id) : ''} onChange={(e) => setLocId(e.target.value)}>
-            {locs.data?.map((l) => <option key={l.id} value={l.id}>{l.name} — {l.path} ({fmtBytes(l.usage.free)} livres)</option>)}
+            {locs.data?.map((l) => <option key={l.id} value={l.id} disabled={l.offline}>{l.name} — {l.path} {l.offline ? '(disco desconectado)' : `(${fmtBytes(l.usage.free)} livres)`}</option>)}
           </select>
+          {chosen && <button type="button" onClick={removeChosen} className="mb-2 text-xs text-red-400 hover:underline">🗑 Remover esta opção de disco da lista</button>}
+          {chosen?.offline && <p className="mb-2 text-xs text-red-400">Este disco está desconectado. Conecte-o ou escolha outra pasta.</p>}
           {chosen && <div className="mb-3"><Bar percent={chosen.percentUsed} warn={!enough} />
             <p className={`mt-1 text-xs ${enough ? 'text-zinc-400' : 'text-red-400'}`}>Espaço livre: {fmtBytes(chosen.usage.free)} {enough ? '' : '— insuficiente para este download'}</p></div>}
           <label className="text-xs text-zinc-400">Subpasta (opcional)</label>
@@ -56,7 +64,7 @@ function DownloadModal({ release, title, kind, catalogRef, relDefault, onClose }
             <span><b>Escolher quais episódios baixar</b><br /><span className="text-xs text-zinc-400">
               {isPack ? 'Este release parece um pacote com vários episódios. ' : ''}O download pausa assim que a lista de arquivos estiver disponível e você marca só o que quer.</span></span>
           </label>
-          <button className={btn} disabled={busy || !chosen || !enough} onClick={start}>Iniciar download</button>
+          <button className={btn} disabled={busy || !chosen || chosen.offline || !enough} onClick={start}>Iniciar download</button>
         </>
       )}
     </Modal>

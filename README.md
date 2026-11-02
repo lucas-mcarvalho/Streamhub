@@ -23,7 +23,7 @@ Aplicação web para **pesquisar, baixar, organizar e assistir filmes, séries e
 ## Recursos
 
 **Catálogo**
-- Dois visuais próprios: **Filmes & Séries** (preto e vermelho, barra superior) e **Animes** (azul-marinho, menu lateral). Um botão alterna entre eles.
+- Dois visuais próprios: **Filmes & Séries** (preto e vermelho, barra superior) e **Animes** (grafite com azul, menu em pílula e banner em tela cheia). Um botão alterna entre eles.
 - Filmes e séries pelo **TMDB**; animes pelo **AniList**.
 - Capas, sinopse, **nota**, **gêneros**, ano, formato, estúdio, temporadas e episódios.
 - Filmes e séries mostram **diretores (ou criadores) e elenco principal** com foto.
@@ -43,6 +43,11 @@ Aplicação web para **pesquisar, baixar, organizar e assistir filmes, séries e
 **Armazenamento**
 - Raízes autorizadas, pastas registradas por tipo (filme, série, anime, geral) e pasta padrão por tipo.
 - Teste de gravação, aviso de pouco espaço e proteção contra *path traversal* e symlinks.
+
+**TV ao vivo** (recurso de teste)
+- Listas públicas de canais abertos do **iptv-org** (Brasil, português, infantil, animação, esportes, filmes e notícias) e suporte a **qualquer lista M3U** que você adicionar.
+- Player HLS no navegador, busca, filtro por grupo e favoritos. O StreamHub faz o proxy dos streams (resolve CORS e conteúdo misto), com URLs assinadas e bloqueio de endereços da rede local.
+- A disponibilidade dos canais varia: listas públicas mudam e falham com frequência.
 
 **Biblioteca e player próprio**
 - Grade de pôsteres com nota, gêneros e progresso por episódio; painel de detalhes por título; "Continuar assistindo".
@@ -133,6 +138,8 @@ Todas as variáveis ficam no arquivo `.env` (modelo em `.env.example`).
 | `JELLYFIN_PUBLIC_URL` | `http://localhost:8096` | endereço do Jellyfin visto pelo navegador |
 | `ARR_IMPORT_ON_COMPLETE` | `false` | se `true`, Sonarr/Radarr importam (copiando) ao concluir |
 
+O tamanho máximo das listas de canais (M3U) é ajustável em **Configurações > TV ao vivo** (1 a 200 MB; padrão 48 MB) e vale na hora, sem reiniciar. Listas maiores usam mais memória.
+
 Variáveis avançadas do backend: `STORAGE_ALLOWED_ROOTS` (padrão `/media`), `STORAGE_MIN_FREE_GB` (aviso de pouco espaço) e `QBIT_PATH_MAP` (`/prefixo_backend=/prefixo_qbit`).
 
 As credenciais das integrações também podem ser editadas em **Configurações**; ficam **cifradas** (AES-GCM) no banco. As chaves de API de Prowlarr, Sonarr e Radarr são lidas automaticamente do `config.xml` (volume `DATA_ROOT` montado em `/integrations`).
@@ -183,6 +190,8 @@ Autenticação HTTP Basic. Principais grupos de rotas:
 | `POST /api/downloads` · `GET /api/downloads/stream` | iniciar download · progresso (SSE) |
 | `GET/POST /api/downloads/{id}/files` | listar arquivos do torrent e escolher quais baixar |
 | `GET /api/library` · `POST /api/library/delete` | arquivos e exclusão |
+| `GET/POST /api/channels/sources` · `GET /api/channels?source=` | listas M3U e canais |
+| `GET /api/channels/proxy` | proxy HLS assinado (TV ao vivo) |
 | `GET /api/library/stream/{id}[/transcode\|/subtitle/{n}]` | reprodução com token assinado |
 
 ## Desenvolvimento

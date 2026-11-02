@@ -143,7 +143,7 @@ export default function Downloads() {
               <span>↓ {(d.dlSpeed / 1048576).toFixed(2)} MB/s · ↑ {(d.upSpeed / 1048576).toFixed(2)} MB/s · ETA {d.status === 'DOWNLOADING' ? fmtEta(d.etaSeconds) : '—'}</span>
               <span className="flex gap-2">
                 {d.status === 'COMPLETED' && <Link to={`/library?q=${encodeURIComponent(d.title.split(/[.\s]S\d/)[0].replace(/\./g, ' '))}`} className="inline-flex items-center gap-1.5 rounded-lg bg-accent-600 px-3 py-1.5 text-sm font-semibold"><Play size={14} fill="white" />Assistir</Link>}
-                {(d.status === 'SELECTING' || d.status === 'DOWNLOADING' || d.status === 'PAUSED') && <button className={d.status === 'SELECTING' ? btn : btnGhost} onClick={() => setPicker(d)}><ListChecks size={14} />Episódios</button>}
+                {(d.status === 'SELECTING' || d.status === 'DOWNLOADING' || d.status === 'PAUSED' || (d.status === 'COMPLETED' && d.kind !== 'MOVIE')) && <button className={d.status === 'SELECTING' ? btn : btnGhost} onClick={() => setPicker(d)}><ListChecks size={14} />{d.status === 'COMPLETED' ? 'Adicionar episódios' : 'Episódios'}</button>}
                 {d.status === 'DOWNLOADING' && <button className={btnGhost} onClick={() => act(() => api(`/downloads/${d.id}/pause`, { method: 'POST' }))}><Pause size={14} />Pausar</button>}
                 {d.status === 'PAUSED' && <button className={btnGhost} onClick={() => act(() => api(`/downloads/${d.id}/resume`, { method: 'POST' }))}><Play size={14} />Retomar</button>}
                 <button className={btnGhost} onClick={() => { if (confirm('Cancelar e remover da lista? (os arquivos são mantidos)')) act(() => api(`/downloads/${d.id}`, { method: 'DELETE' })) }}>

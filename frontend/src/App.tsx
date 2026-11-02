@@ -10,9 +10,11 @@ import Downloads from './pages/Downloads'
 import Explore from './pages/Explore'
 import Home from './pages/Home'
 import Library from './pages/Library'
+import AnimeHome from './pages/AnimeHome'
 import ModeHome from './pages/ModeHome'
 import SearchPage from './pages/SearchPage'
 import Settings from './pages/Settings'
+import Channels from './pages/Channels'
 import Storage from './pages/Storage'
 import TitlePage from './pages/TitlePage'
 import Watch from './pages/Watch'
@@ -63,12 +65,13 @@ export default function App() {
               <Route path="movies" element={<Explore kind="MOVIE" />} />
               <Route path="series" element={<Explore kind="SERIES" />} />
               <Route path="cinema/library" element={<Library scope="cinema" />} />
-              <Route path="anime" element={<ModeHome mode="anime" />} />
+              <Route path="anime" element={<AnimeHome />} />
               <Route path="anime/explore" element={<Explore kind="ANIME" />} />
               <Route path="anime/library" element={<Library scope="anime" />} />
               <Route path="library" element={<Navigate to="/cinema/library" replace />} />
               <Route path="search" element={<SearchPage />} />
               <Route path="title/:source/:type/:id" element={<TitlePage />} />
+              <Route path="tv" element={<Channels />} />
               <Route path="downloads" element={<Downloads />} />
               <Route path="storage" element={<Storage />} />
               <Route path="settings" element={<Settings />} />

@@ -73,14 +73,21 @@ public class DownloadService {
     }
 
     private String validateSource(StartRequest r) {
-        if (r.magnetUrl() != null && r.magnetUrl().startsWith("magnet:?")) return r.magnetUrl();
-        String url = r.downloadUrl();
-        if (url != null && (url.startsWith("http://") || url.startsWith("https://"))) {
-            // somente URLs servidas pelo próprio Prowlarr, para evitar que o qBittorrent seja usado como proxy (SSRF)
-            if (url.startsWith(prowlarr.baseUrl().replaceAll("/+$", "") + "/")) return url;
-            throw new ApiException(HttpStatus.BAD_REQUEST, "BAD_SOURCE", "URL de download não pertence ao Prowlarr configurado");
+        // 1) magnet de verdade
+        for (String u : new String[] {r.magnetUrl(), r.downloadUrl()}) {
+            if (u != null && u.startsWith("magnet:?")) return u;
         }
-        throw new ApiException(HttpStatus.BAD_REQUEST, "BAD_SOURCE", "Informe um magnet ou uma URL de download");
+        // 2) link servido pelo próprio Prowlarr. Alguns indexadores (ex.: Nyaa.si) devolvem esse link no campo "magnet".
+        // Só endereços do Prowlarr configurado são aceitos, para o qBittorrent não virar um proxy (SSRF).
+        String base = prowlarr.baseUrl().replaceAll("/+$", "") + "/";
+        boolean sawHttp = false;
+        for (String u : new String[] {r.downloadUrl(), r.magnetUrl()}) {
+            if (u == null || !(u.startsWith("http://") || u.startsWith("https://"))) continue;
+            sawHttp = true;
+            if (u.startsWith(base)) return u;
+        }
+        if (sawHttp) throw new ApiException(HttpStatus.BAD_REQUEST, "BAD_SOURCE", "URL de download não pertence ao Prowlarr configurado");
+        throw new ApiException(HttpStatus.BAD_REQUEST, "BAD_SOURCE", "Este resultado não tem magnet nem link de download");
     }
 
     public DownloadView start(StartRequest r) {
@@ -88,6 +95,7 @@ public class DownloadService {
         String kind = r.kind() == null ? "MOVIE" : r.kind().toUpperCase();
         String source = validateSource(r);
         StorageLocation loc = storage.pick(r.locationId(), kind);
+        storage.requireOnline(loc);
         Path dest = storage.resolveDestination(loc, r.relativePath());
         try {
             Files.createDirectories(dest);
@@ -96,6 +104,14 @@ public class DownloadService {
         }
         if (!Files.isWritable(dest)) throw new ApiException(HttpStatus.FORBIDDEN, "NO_PERMISSION", "Sem permissão de gravação no destino");
         storage.requireSpace(dest, r.sizeBytes());
+
+        // o qBittorrent ignora em silêncio um torrent que já existe; nesse caso reaproveita o que já está lá
+        String infoHash = TorrentHash.of(source);
+        if (infoHash != null) {
+            Map<String, Object> existing = qbit.info().stream()
+                .filter(t -> infoHash.equalsIgnoreCase(J.str(t.get("hash")))).findFirst().orElse(null);
+            if (existing != null) return reuse(r, kind, source, loc, dest, infoHash);
+        }
 
         Download d = new Download();
         d.setTitle(r.title());
@@ -120,6 +136,66 @@ public class DownloadService {
         d = repo.save(d);
         publish();
         return DownloadView.of(d);
+    }
+
+    /** O torrent já está no qBittorrent: reabre o download existente (ou adota o torrent órfão) em vez de duplicar. */
+    private DownloadView reuse(StartRequest r, String kind, String source, StorageLocation loc, Path dest, String hash) {
+        Download d = repo.findAll().stream().filter(x -> hash.equalsIgnoreCase(x.getHash())).findFirst().orElse(null);
+        if (d == null) {
+            d = new Download();
+            d.setTitle(r.title());
+            d.setKind(kind);
+            d.setCatalogRef(r.catalogRef());
+            d.setIndexer(r.indexer());
+            d.setSourceUrl(source);
+            d.setLocationId(loc.getId());
+            d.setRelativePath(r.relativePath() == null ? "" : r.relativePath());
+            d.setSavePath(dest.toString());
+            d.setSizeBytes(r.sizeBytes());
+            d.setTag("pending");
+            d = repo.save(d);
+            d.setTag("sh-" + d.getId());
+            d.setHash(hash);
+            qbit.addTags(hash, d.getTag());
+        }
+        d.setErrorMessage(null);
+        d.setCompletedAt(null);
+        currentDestination(d);
+        if (Boolean.TRUE.equals(r.chooseFiles())) {
+            qbit.pause(hash);
+            d.setStatus("SELECTING");
+            d.setAwaitingSelection(false);
+        } else {
+            List<Integer> all = new java.util.ArrayList<>();
+            for (int i = 0; i < qbit.files(hash).size(); i++) all.add(i);
+            qbit.setFilePriority(hash, all, 1);
+            qbit.resume(hash);
+            d.setStatus("DOWNLOADING");
+        }
+        d.setDlSpeed(0);
+        d.setEtaSeconds(null);
+        d = repo.save(d);
+        publish();
+        return DownloadView.of(d);
+    }
+
+    /**
+     * Destino atual do download. Se o disco foi remontado com outro nome, o caminho guardado ficou velho:
+     * recalcula pelo local registrado e avisa o qBittorrent, para o espaço e os arquivos serem os do disco certo.
+     */
+    private Path currentDestination(Download d) {
+        if (d.getLocationId() == null) return Path.of(d.getSavePath());
+        StorageLocation loc = storage.get(d.getLocationId());
+        storage.requireOnline(loc);
+        Path dest = storage.resolveDestination(loc, d.getRelativePath());
+        if (!dest.toString().equals(d.getSavePath())) {
+            if (d.getHash() != null) {
+                qbit.setLocation(d.getHash(), toQbitPath(dest));   // ao retomar, o qBittorrent confere os arquivos no lugar novo
+            }
+            d.setSavePath(dest.toString());
+            repo.save(d);
+        }
+        return dest;
     }
 
     public List<DownloadView> list() {
@@ -162,13 +238,15 @@ public class DownloadService {
         }
         List<FileEntry> all = files(id);
         long need = all.stream().filter(f -> selected.contains(f.index())).mapToLong(f -> (long) (f.size() * (1 - f.progress()))).sum();
-        storage.requireSpace(Path.of(d.getSavePath()), need);
+        storage.requireSpace(currentDestination(d), need);
         List<Integer> skip = all.stream().map(FileEntry::index).filter(i -> !selected.contains(i)).toList();
         qbit.setFilePriority(hash, selected, 1);
         qbit.setFilePriority(hash, skip, 0);
-        if ("SELECTING".equals(d.getStatus()) || "PAUSED".equals(d.getStatus())) {
+        // inclui COMPLETED: marcar mais episódios de um download já concluído volta a baixar
+        if (Set.of("SELECTING", "PAUSED", "COMPLETED").contains(d.getStatus()) && !selected.isEmpty()) {
             qbit.resume(hash);
             d.setStatus("DOWNLOADING");
+            d.setCompletedAt(null);
             repo.save(d);
         }
         publish();
@@ -184,6 +262,7 @@ public class DownloadService {
 
     public void resume(long id) {
         Download d = get(id);
+        currentDestination(d);
         qbit.resume(hashOf(d));
         d.setStatus("DOWNLOADING");
         repo.save(d);
@@ -217,8 +296,8 @@ public class DownloadService {
         return switch (s == null ? "" : s) {
             case "error", "missingFiles" -> "ERROR";
             case "pausedDL", "stoppedDL" -> "PAUSED";
-            case "queuedDL" -> "QUEUED";
-            case "pausedUP", "stoppedUP", "uploading", "stalledUP", "queuedUP", "forcedUP", "checkingUP" ->
+            case "queuedDL", "checkingUP", "checkingDL", "checkingResumeData" -> "QUEUED";   // verificando arquivos
+            case "pausedUP", "stoppedUP", "uploading", "stalledUP", "queuedUP", "forcedUP" ->
                 progress >= 1.0 ? "COMPLETED" : "PAUSED";
             default -> "DOWNLOADING";
         };
@@ -227,10 +306,12 @@ public class DownloadService {
     @Scheduled(fixedDelay = 2000)
     public synchronized void sync() {
         List<Download> active = repo.findByStatusIn(ACTIVE);
-        if (!active.isEmpty() && integrations.isConfigured(Svc.QBITTORRENT)) {
+        List<Download> done = repo.findByStatusIn(List.of("COMPLETED")).stream().filter(x -> x.getHash() != null).toList();
+        if ((!active.isEmpty() || !done.isEmpty()) && integrations.isConfigured(Svc.QBITTORRENT)) {
             try {
                 List<Map<String, Object>> torrents = qbit.info();
                 for (Download d : active) applyTorrent(d, torrents);
+                for (Download d : done) reactivateIfDownloading(d, torrents);
             } catch (Exception e) {
                 log.debug("Sincronização com qBittorrent falhou: {}", e.getMessage());
             }
@@ -238,12 +319,27 @@ public class DownloadService {
         publish();
     }
 
+    /** Um download concluído cujo torrent voltou a baixar (episódios adicionados depois) volta a ser acompanhado. */
+    private void reactivateIfDownloading(Download d, List<Map<String, Object>> torrents) {
+        Map<String, Object> t = torrents.stream().filter(x -> hasTag(x, d.getTag())).findFirst().orElse(null);
+        if (t == null) return;
+        String state = J.str(t.get("state"));
+        double progress = J.dbl(t.get("progress")) == null ? 0 : J.dbl(t.get("progress"));
+        boolean downloading = Set.of("downloading", "stalledDL", "forcedDL", "metaDL", "forcedMetaDL", "queuedDL", "allocating").contains(state);
+        if (downloading && progress < 1.0) {
+            d.setStatus("DOWNLOADING");
+            d.setCompletedAt(null);
+            repo.save(d);
+            applyTorrent(d, torrents);
+        }
+    }
+
     private void applyTorrent(Download d, List<Map<String, Object>> torrents) {
         Map<String, Object> t = torrents.stream().filter(x -> hasTag(x, d.getTag())).findFirst().orElse(null);
         if (t == null) {
             if (d.getHash() != null || d.getCreatedAt().isBefore(LocalDateTime.now().minusSeconds(90))) {
                 d.setStatus("ERROR");
-                d.setErrorMessage("Torrent não encontrado no qBittorrent (removido ou rejeitado)");
+                d.setErrorMessage("Torrent não encontrado no qBittorrent (removido, rejeitado ou já existente com outro nome)");
                 repo.save(d);
             }
             return;

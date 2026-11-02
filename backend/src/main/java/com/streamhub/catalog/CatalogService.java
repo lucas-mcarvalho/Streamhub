@@ -21,6 +21,7 @@ public class CatalogService {
 
     private final TmdbClient tmdb;
     private final AniListClient anilist;
+    private final OverviewLocalizer localizer;
     private record Entry(Object value, long expires) {}
 
     private final ConcurrentHashMap<String, Entry> cache = new ConcurrentHashMap<>();
@@ -37,9 +38,10 @@ public class CatalogService {
 
     private final ConcurrentHashMap<String, Optional<CatalogItem>> matchCache = new ConcurrentHashMap<>();
 
-    public CatalogService(TmdbClient tmdb, AniListClient anilist) {
+    public CatalogService(TmdbClient tmdb, AniListClient anilist, OverviewLocalizer localizer) {
         this.tmdb = tmdb;
         this.anilist = anilist;
+        this.localizer = localizer;
     }
 
     private Section section(String key, String title, Supplier<List<CatalogItem>> s) {
@@ -48,7 +50,7 @@ public class CatalogService {
 
     private Section section(String cacheKey, String key, String title, Supplier<List<CatalogItem>> s) {
         try {
-            return new Section(key, title, cached(cacheKey, 600, s), null);
+            return new Section(key, title, cached(cacheKey, 600, () -> localizer.localize(s.get(), 8)), null);
         } catch (Exception e) {
             return new Section(key, title, List.of(), e.getMessage());
         }
@@ -84,7 +86,7 @@ public class CatalogService {
     }
 
     public List<CatalogItem> discover(String kind, String q, String sort, String genre, int page) {
-        return cached("discover:" + kind + "|" + q + "|" + sort + "|" + genre + "|" + page, 600, () -> doDiscover(kind, q, sort, genre, page));
+        return cached("discover:" + kind + "|" + q + "|" + sort + "|" + genre + "|" + page, 600, () -> localizer.localize(doDiscover(kind, q, sort, genre, page), 8));
     }
 
     private List<CatalogItem> doDiscover(String kind, String q, String sort, String genre, int page) {
@@ -116,7 +118,7 @@ public class CatalogService {
     }
 
     private TitleDetails doDetails(String source, String type, String id) {
-        if (source.equals("anilist")) return new TitleDetails(anilist.details(id), List.of(), List.of(), List.of());
+        if (source.equals("anilist")) return new TitleDetails(localizer.localize(anilist.details(id)), List.of(), List.of(), List.of());
         CatalogItem item = tmdb.details(type, id);
         List<Person> directors = List.of(), cast = List.of();
         try {
@@ -130,6 +132,42 @@ public class CatalogService {
     }
 
     public List<Episode> episodes(String id, int season) { return tmdb.episodes(id, season); }
+
+    /** Guia de episódios (título, descrição, imagem e duração) da série que corresponde a uma pasta da biblioteca. */
+    public List<GuideEpisode> episodeGuide(String folderName, String kind) {
+        return cached("guide:" + folderName.toLowerCase() + "|" + kind, 6 * 3600, () -> doGuide(folderName, kind));
+    }
+
+    private List<GuideEpisode> doGuide(String folderName, String kind) {
+        try {
+            Optional<CatalogItem> m = match(folderName, kind);
+            String tvId = null;
+            if (m.isPresent() && "tmdb".equals(m.get().source()) && "tv".equals(m.get().type())) tvId = m.get().id();
+            if (tvId == null) {
+                // animes vêm do AniList: procura a mesma série no TMDB pelo título
+                List<String> names = new ArrayList<>();
+                m.ifPresent(i -> { if (i.title() != null) names.add(i.title()); if (i.originalTitle() != null) names.add(i.originalTitle()); });
+                names.add(NOISE.matcher(folderName).replaceAll(" ").replaceAll("\\s+", " ").trim());
+                Integer year = m.map(CatalogItem::year).orElse(null);
+                for (String n : names) {
+                    tvId = tmdb.findTvId(n, year).orElse(null);
+                    if (tvId != null) break;
+                }
+            }
+            if (tvId == null) return List.of();
+            List<GuideEpisode> out = new ArrayList<>();
+            int absolute = 0;
+            for (Season sn : tmdb.seasons(tvId)) {
+                for (Episode e : tmdb.episodes(tvId, sn.number())) {
+                    out.add(new GuideEpisode(sn.number(), e.number(), ++absolute, e.name(), e.overview(), e.stillUrl(), e.runtime()));
+                }
+            }
+            return out;
+        } catch (RuntimeException e) {
+            org.slf4j.LoggerFactory.getLogger(CatalogService.class).warn("Guia de episódios indisponível para '{}': {}", folderName, e.toString());
+            return List.of();   // sem TMDB configurado ou série não encontrada: a biblioteca segue sem o guia
+        }
+    }
 
     /** Encontra o título do catálogo que corresponde ao nome de uma pasta da biblioteca (ex.: "ONE PIECE (1999)"). */
     public Optional<CatalogItem> match(String folderName, String kind) {
@@ -160,6 +198,7 @@ public class CatalogService {
         }
         if (best.isEmpty()) best = candidates.stream().filter(c -> titleMatches(c, norm)).findFirst();
         if (best.isEmpty()) best = candidates.stream().findFirst();
+        best = best.map(localizer::localize);
         if (anyOk) matchCache.put(key, best);
         return best;
     }

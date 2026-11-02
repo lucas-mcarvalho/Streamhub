@@ -30,7 +30,9 @@ import com.streamhub.storage.StorageService;
 @Service
 public class LibraryService {
     private static final Set<String> VIDEO = Set.of("mkv", "mp4", "m4v", "avi", "mov", "webm", "ts", "wmv");
-    private static final Pattern SXXEYY = Pattern.compile("[Ss](\\d{1,2})[Ee](\\d{1,3})|(\\d{1,2})x(\\d{2,3})");
+    /** Numeração absoluta de anime: "Black Clover - 009.mkv", "Show - 12v2 [1080p].mkv". */
+    private static final Pattern ABSOLUTE = Pattern.compile("\\s-\\s(\\d{1,4})(?:v\\d)?(?=[\\s.\\[(]|$)");
+    private static final Pattern SXXEYY = Pattern.compile("[Ss](\\d{1,2})[Ee](\\d{1,4})|(\\d{1,2})x(\\d{2,4})");
 
     public record Track(String type, String codec, String language, String title) {}
 
@@ -82,7 +84,7 @@ public class LibraryService {
 
     public List<LibraryFile> list(String kind) {
         List<LibraryFile> out = new ArrayList<>();
-        for (StorageLocation loc : locations.findAll()) {
+        for (StorageLocation loc : storage.all()) {
             if (kind != null && !kind.isBlank() && !loc.getKind().equalsIgnoreCase(kind)) continue;
             Path base = Path.of(loc.getPath());
             if (!Files.isDirectory(base)) continue;
@@ -96,6 +98,12 @@ public class LibraryService {
                     if (m.find()) {
                         season = Integer.valueOf(m.group(1) != null ? m.group(1) : m.group(3));
                         ep = Integer.valueOf(m.group(2) != null ? m.group(2) : m.group(4));
+                    } else {
+                        Matcher a = ABSOLUTE.matcher(fileName);
+                        while (a.find()) {   // vale o último "- NNN" do nome; ignora anos
+                            int n = Integer.parseInt(a.group(1));
+                            if (n > 0 && !(n >= 1900 && n <= 2099)) ep = n;
+                        }
                     }
                     try {
                         out.add(new LibraryFile(encodeId(loc.getId(), rel), fileName, group, loc.getKind(), Files.size(p),
@@ -109,8 +117,30 @@ public class LibraryService {
             }
         }
         out.sort(Comparator.comparing(LibraryFile::group, String.CASE_INSENSITIVE_ORDER)
-            .thenComparing(f -> f.season() == null ? 0 : f.season()).thenComparing(f -> f.episode() == null ? 0 : f.episode()));
+            .thenComparing(f -> f.season() == null ? 0 : f.season())
+            .thenComparing(f -> f.episode() == null ? Integer.MAX_VALUE : f.episode())
+            .thenComparing(LibraryFile::name, LibraryService::naturalCompare));
         return out;
+    }
+
+    /** Ordem natural: "Ep 2" antes de "Ep 10". */
+    static int naturalCompare(String a, String b) {
+        int i = 0, j = 0;
+        while (i < a.length() && j < b.length()) {
+            char x = a.charAt(i), y = b.charAt(j);
+            if (Character.isDigit(x) && Character.isDigit(y)) {
+                int si = i, sj = j;
+                while (i < a.length() && Character.isDigit(a.charAt(i))) i++;
+                while (j < b.length() && Character.isDigit(b.charAt(j))) j++;
+                int c = new java.math.BigInteger(a.substring(si, i)).compareTo(new java.math.BigInteger(b.substring(sj, j)));
+                if (c != 0) return c;
+            } else {
+                int c = Character.compare(Character.toLowerCase(x), Character.toLowerCase(y));
+                if (c != 0) return c;
+                i++; j++;
+            }
+        }
+        return Integer.compare(a.length() - i, b.length() - j);
     }
 
     /** Lê as faixas reais de áudio/legenda com ffprobe (quando instalado). */
@@ -275,6 +305,51 @@ public class LibraryService {
             }
         }
         return deleted;
+    }
+
+    // ---------- miniatura do ponto em que o usuário parou ----------
+
+    private final java.util.Map<String, byte[]> thumbCache = java.util.Collections.synchronizedMap(
+        new java.util.LinkedHashMap<>(64, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(java.util.Map.Entry<String, byte[]> eldest) { return size() > 400; }
+        });
+    private final java.util.concurrent.Semaphore thumbSlots = new java.util.concurrent.Semaphore(3);
+
+    /** Quadro JPEG do vídeo na posição indicada (arredondada a 5 s para aproveitar o cache). */
+    public byte[] thumbnail(String id, double seconds, int width) {
+        Path p = resolve(id);
+        int w = Math.max(160, Math.min(width, 960));
+        long at = Math.max(0, Math.round(seconds / 5.0) * 5);
+        String key = id + "|" + at + "|" + w;
+        byte[] cached = thumbCache.get(key);
+        if (cached != null) return cached;
+        try {
+            thumbSlots.acquire();
+            try {
+                byte[] img = frame(p, at, w);
+                if (img.length == 0 && at > 0) img = frame(p, 0, w); // posição além do fim: usa o início
+                if (img.length == 0) throw new ApiException(HttpStatus.NOT_FOUND, "NO_FRAME", "Não foi possível gerar a miniatura");
+                thumbCache.put(key, img);
+                return img;
+            } finally {
+                thumbSlots.release();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "INTERRUPTED", "Interrompido");
+        } catch (IOException e) {
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "NO_FFMPEG", "ffmpeg não está disponível no servidor");
+        }
+    }
+
+    private byte[] frame(Path p, long at, int width) throws IOException, InterruptedException {
+        Process pr = new ProcessBuilder("ffmpeg", "-v", "error", "-nostdin", "-ss", String.valueOf(at), "-i", p.toString(),
+            "-frames:v", "1", "-vf", "scale=" + width + ":-2", "-q:v", "4", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1")
+            .redirectError(ProcessBuilder.Redirect.DISCARD).start();
+        byte[] out = pr.getInputStream().readAllBytes();
+        if (!pr.waitFor(20, TimeUnit.SECONDS)) pr.destroyForcibly();
+        return out;
     }
 
     // ---------- token de streaming (a tag <video> não envia cabeçalho Authorization) ----------

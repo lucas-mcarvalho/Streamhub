@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { CheckCircle2, ExternalLink, Film, HardDrive, Play, Search, Trash2, X } from 'lucide-react'
-import { api, fmtBytes, genrePt, progressOf, type CatalogItem, type LibraryFile } from '../api'
+import { api, fmtBytes, genrePt, progressOf, type CatalogItem, type GuideEpisode, type LibraryFile } from '../api'
 import ContinueRow from '../components/ContinueRow'
 import { useToast } from '../components/Toast'
 import { Bar, Chip, PageTitle, PosterSkeleton, Score, Spinner } from '../components/ui'
@@ -54,9 +54,13 @@ function LibraryCard({ g, meta, index, onOpen }: { g: Group; meta: Meta; index: 
 function Detail({ g, meta, onClose, onChanged }: { g: Group; meta: Meta; onClose: () => void; onChanged: () => void }) {
   const toast = useToast()
   const anime = meta?.kind === 'ANIME' || g.kind === 'ANIME'
+  // títulos, descrições e imagens dos episódios (TMDB); sem eles a lista continua só com os arquivos
+  const guide = useAsync(() => (g.kind === 'MOVIE' ? Promise.resolve([] as GuideEpisode[]) : api<GuideEpisode[]>(`/catalog/episode-guide?title=${encodeURIComponent(g.name)}&kind=${g.kind}`)), [g.key])
+  const guideOf = (f: LibraryFile) => (f.episode == null ? undefined
+    : guide.data?.find((e) => (f.season != null ? e.season === f.season && e.number === f.episode : e.absolute === f.episode)))
   const seasons = useMemo(() => {
     const m = new Map<string, LibraryFile[]>()
-    g.files.forEach((f) => { const k = f.season != null ? `Temporada ${f.season}` : 'Arquivos'; m.set(k, [...(m.get(k) ?? []), f]) })
+    g.files.forEach((f) => { const k = f.season != null ? `Temporada ${f.season}` : f.episode != null ? 'Episódios' : 'Arquivos'; m.set(k, [...(m.get(k) ?? []), f]) })
     return [...m.entries()]
   }, [g])
   const remove = async (ids: string[], what: string) => {
@@ -91,16 +95,29 @@ function Detail({ g, meta, onClose, onChanged }: { g: Group; meta: Meta; onClose
               <ul className="space-y-1.5">
                 {fs.map((f, n) => {
                   const p = progressOf(f.id)
+                  const ep = guideOf(f)
                   return (
-                    <motion.li key={f.id} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: n * 0.03 }}
-                      className="glass group flex items-center gap-3 rounded-xl p-2.5">
-                      <Link to={`/watch/${f.id}`} className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-accent-600 shadow-lg transition group-hover:scale-110"><Play size={18} fill="white" /></Link>
+                    <motion.li key={f.id} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: Math.min(n, 12) * 0.03 }}
+                      className="glass group flex gap-3 rounded-xl p-2.5">
+                      <Link to={`/watch/${f.id}`} className="relative aspect-video w-28 shrink-0 self-start overflow-hidden rounded-lg bg-surface2 sm:w-48">
+                        {ep?.stillUrl ? <img src={ep.stillUrl} alt="" loading="lazy" className="h-full w-full object-cover transition group-hover:scale-105" />
+                          : <div className="h-full w-full bg-gradient-to-br from-surface2 to-surface" />}
+                        <span className="absolute inset-0 grid place-items-center bg-black/25 transition group-hover:bg-black/45">
+                          <span className="grid h-10 w-10 place-items-center rounded-full bg-accent-600/90 shadow-lg transition group-hover:scale-110"><Play size={18} fill="white" className="ml-0.5" /></span>
+                        </span>
+                        {p.ratio > 0 && !p.done && <div className="absolute inset-x-0 bottom-0"><Bar percent={p.ratio * 100} /></div>}
+                      </Link>
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium">{f.episode != null ? `Episódio ${f.episode}` : f.name}{p.done && <CheckCircle2 size={14} className="ml-2 inline text-emerald-400" />}</div>
-                        <div className="truncate text-xs text-zinc-500">{f.name} · {fmtBytes(f.sizeBytes)}</div>
-                        {p.ratio > 0 && !p.done && <div className="mt-1.5"><Bar percent={p.ratio * 100} /></div>}
+                        <div className="flex items-baseline gap-2">
+                          {f.episode != null && <span className="shrink-0 text-sm font-semibold tabular-nums text-zinc-500">{f.episode}</span>}
+                          <Link to={`/watch/${f.id}`} className="line-clamp-2 text-sm font-semibold leading-snug hover:text-accent-400 sm:truncate sm:text-base">{ep?.name ?? (f.episode != null ? `Episódio ${f.episode}` : f.name)}</Link>
+                          {p.done && <CheckCircle2 size={14} className="shrink-0 self-center text-emerald-400" />}
+                          {ep?.runtime ? <span className="ml-auto hidden shrink-0 text-xs text-zinc-500 sm:inline">{ep.runtime} min</span> : null}
+                        </div>
+                        {ep?.overview && <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-zinc-400 sm:line-clamp-3 sm:text-sm">{ep.overview}</p>}
+                        <div className="mt-1 truncate text-[11px] text-zinc-600">{ep?.runtime ? <span className="sm:hidden">{ep.runtime} min · </span> : null}{f.name} · {fmtBytes(f.sizeBytes)}</div>
                       </div>
-                      <button title="Apagar arquivo" onClick={() => remove([f.id], `"${f.name}"`)} className="p-1.5 text-zinc-500 opacity-0 transition hover:text-red-400 group-hover:opacity-100"><Trash2 size={16} /></button>
+                      <button title="Apagar arquivo" onClick={() => remove([f.id], `"${f.name}"`)} className="self-start p-1.5 text-zinc-500 opacity-0 transition hover:text-red-400 group-hover:opacity-100 max-md:opacity-100"><Trash2 size={16} /></button>
                     </motion.li>
                   )
                 })}

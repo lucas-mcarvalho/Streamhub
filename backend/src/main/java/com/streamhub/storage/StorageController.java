@@ -27,6 +27,9 @@ public class StorageController {
     @GetMapping("/roots")
     public List<StorageService.RootView> roots() { return service.roots(); }
 
+    @GetMapping("/disks")
+    public List<StorageService.DiskView> disks() { return service.disks(); }
+
     @GetMapping("/browse")
     public List<StorageService.DirEntry> browse(@RequestParam int root, @RequestParam(defaultValue = "") String path) {
         return service.browse(root, path);

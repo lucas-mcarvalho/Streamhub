@@ -8,6 +8,7 @@ export type Genre = { id: string; name: string }
 export type Section = { key: string; title: string; items: CatalogItem[]; error?: string }
 export type Season = { number: number; name: string; episodeCount: number; airDate?: string }
 export type Episode = { number: number; name: string; overview?: string; airDate?: string; stillUrl?: string; runtime?: number }
+export type GuideEpisode = { season: number; number: number; absolute: number; name: string; overview?: string; stillUrl?: string; runtime?: number }
 export type Release = {
   guid: string; title: string; resolution: string; source?: string; codec?: string; sizeBytes: number
   seeders?: number; leechers?: number; indexer: string; indexerId: number; publishDate?: string
@@ -17,8 +18,9 @@ export type Release = {
 export type Usage = { total: number; free: number; used: number }
 export type Location = {
   id: number; name: string; path: string; kind: string; isDefault: boolean; exists: boolean; writable: boolean
-  usage: Usage; percentUsed: number; lowSpace: boolean
+  usage: Usage; percentUsed: number; lowSpace: boolean; offline: boolean
 }
+export type Disk = { name: string; fsType: string; rootIndex: number; relativePath: string; usage: Usage; writable: boolean }
 export type Root = { index: number; path: string; exists: boolean; usage: Usage }
 export type Download = {
   id: number; title: string; kind: string; indexer?: string; status: string; progress: number; sizeBytes: number
@@ -117,3 +119,7 @@ export const progressOf = (id: string) => {
 }
 
 export type DownloadFile = { index: number; name: string; size: number; progress: number; selected: boolean }
+
+export type ChannelSource = { id: number; name: string; origin?: string; url: string; builtin: boolean; position: number }
+export type Channel = { id: number; name: string; logo?: string; group: string; genres: string[]; hls: boolean; direct: boolean; playUrl: string }
+export const GENRE_ORDER = ['Desenho', 'Filmes', 'Séries', 'Esportes', 'Notícias', 'Música', 'Documentários', 'Entretenimento', 'Religioso', 'Educação', 'Culinária', 'Compras', 'Outros']
