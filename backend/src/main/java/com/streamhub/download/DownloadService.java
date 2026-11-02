@@ -242,9 +242,11 @@ public class DownloadService {
         List<Integer> skip = all.stream().map(FileEntry::index).filter(i -> !selected.contains(i)).toList();
         qbit.setFilePriority(hash, selected, 1);
         qbit.setFilePriority(hash, skip, 0);
-        if ("SELECTING".equals(d.getStatus()) || "PAUSED".equals(d.getStatus())) {
+        // inclui COMPLETED: marcar mais episódios de um download já concluído volta a baixar
+        if (Set.of("SELECTING", "PAUSED", "COMPLETED").contains(d.getStatus()) && !selected.isEmpty()) {
             qbit.resume(hash);
             d.setStatus("DOWNLOADING");
+            d.setCompletedAt(null);
             repo.save(d);
         }
         publish();
@@ -304,15 +306,32 @@ public class DownloadService {
     @Scheduled(fixedDelay = 2000)
     public synchronized void sync() {
         List<Download> active = repo.findByStatusIn(ACTIVE);
-        if (!active.isEmpty() && integrations.isConfigured(Svc.QBITTORRENT)) {
+        List<Download> done = repo.findByStatusIn(List.of("COMPLETED")).stream().filter(x -> x.getHash() != null).toList();
+        if ((!active.isEmpty() || !done.isEmpty()) && integrations.isConfigured(Svc.QBITTORRENT)) {
             try {
                 List<Map<String, Object>> torrents = qbit.info();
                 for (Download d : active) applyTorrent(d, torrents);
+                for (Download d : done) reactivateIfDownloading(d, torrents);
             } catch (Exception e) {
                 log.debug("Sincronização com qBittorrent falhou: {}", e.getMessage());
             }
         }
         publish();
+    }
+
+    /** Um download concluído cujo torrent voltou a baixar (episódios adicionados depois) volta a ser acompanhado. */
+    private void reactivateIfDownloading(Download d, List<Map<String, Object>> torrents) {
+        Map<String, Object> t = torrents.stream().filter(x -> hasTag(x, d.getTag())).findFirst().orElse(null);
+        if (t == null) return;
+        String state = J.str(t.get("state"));
+        double progress = J.dbl(t.get("progress")) == null ? 0 : J.dbl(t.get("progress"));
+        boolean downloading = Set.of("downloading", "stalledDL", "forcedDL", "metaDL", "forcedMetaDL", "queuedDL", "allocating").contains(state);
+        if (downloading && progress < 1.0) {
+            d.setStatus("DOWNLOADING");
+            d.setCompletedAt(null);
+            repo.save(d);
+            applyTorrent(d, torrents);
+        }
     }
 
     private void applyTorrent(Download d, List<Map<String, Object>> torrents) {
