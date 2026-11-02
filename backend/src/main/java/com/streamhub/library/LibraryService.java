@@ -30,6 +30,8 @@ import com.streamhub.storage.StorageService;
 @Service
 public class LibraryService {
     private static final Set<String> VIDEO = Set.of("mkv", "mp4", "m4v", "avi", "mov", "webm", "ts", "wmv");
+    /** Numeração absoluta de anime: "Black Clover - 009.mkv", "Show - 12v2 [1080p].mkv". */
+    private static final Pattern ABSOLUTE = Pattern.compile("\\s-\\s(\\d{1,4})(?:v\\d)?(?=[\\s.\\[(]|$)");
     private static final Pattern SXXEYY = Pattern.compile("[Ss](\\d{1,2})[Ee](\\d{1,4})|(\\d{1,2})x(\\d{2,4})");
 
     public record Track(String type, String codec, String language, String title) {}
@@ -96,6 +98,12 @@ public class LibraryService {
                     if (m.find()) {
                         season = Integer.valueOf(m.group(1) != null ? m.group(1) : m.group(3));
                         ep = Integer.valueOf(m.group(2) != null ? m.group(2) : m.group(4));
+                    } else {
+                        Matcher a = ABSOLUTE.matcher(fileName);
+                        while (a.find()) {   // vale o último "- NNN" do nome; ignora anos
+                            int n = Integer.parseInt(a.group(1));
+                            if (n > 0 && !(n >= 1900 && n <= 2099)) ep = n;
+                        }
                     }
                     try {
                         out.add(new LibraryFile(encodeId(loc.getId(), rel), fileName, group, loc.getKind(), Files.size(p),
@@ -109,8 +117,30 @@ public class LibraryService {
             }
         }
         out.sort(Comparator.comparing(LibraryFile::group, String.CASE_INSENSITIVE_ORDER)
-            .thenComparing(f -> f.season() == null ? 0 : f.season()).thenComparing(f -> f.episode() == null ? 0 : f.episode()));
+            .thenComparing(f -> f.season() == null ? 0 : f.season())
+            .thenComparing(f -> f.episode() == null ? Integer.MAX_VALUE : f.episode())
+            .thenComparing(LibraryFile::name, LibraryService::naturalCompare));
         return out;
+    }
+
+    /** Ordem natural: "Ep 2" antes de "Ep 10". */
+    static int naturalCompare(String a, String b) {
+        int i = 0, j = 0;
+        while (i < a.length() && j < b.length()) {
+            char x = a.charAt(i), y = b.charAt(j);
+            if (Character.isDigit(x) && Character.isDigit(y)) {
+                int si = i, sj = j;
+                while (i < a.length() && Character.isDigit(a.charAt(i))) i++;
+                while (j < b.length() && Character.isDigit(b.charAt(j))) j++;
+                int c = new java.math.BigInteger(a.substring(si, i)).compareTo(new java.math.BigInteger(b.substring(sj, j)));
+                if (c != 0) return c;
+            } else {
+                int c = Character.compare(Character.toLowerCase(x), Character.toLowerCase(y));
+                if (c != 0) return c;
+                i++; j++;
+            }
+        }
+        return Integer.compare(a.length() - i, b.length() - j);
     }
 
     /** Lê as faixas reais de áudio/legenda com ffprobe (quando instalado). */

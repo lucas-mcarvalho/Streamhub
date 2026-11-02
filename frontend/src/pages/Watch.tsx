@@ -286,7 +286,7 @@ export default function Watch() {
     <div>
       <div className="mb-2 flex items-center justify-between text-sm">
         <Link to="/library" className="flex items-center gap-1 text-zinc-400 hover:text-white"><ArrowLeft size={16} />Biblioteca</Link>
-        <span className="truncate pl-4 text-zinc-300">{file?.group} {file?.season != null ? `· T${file.season} E${file.episode}` : ''}</span>
+        <span className="truncate pl-4 text-zinc-300">{file?.group} {file?.season != null ? `· T${file.season} E${file.episode}` : file?.episode != null ? `· Episódio ${file.episode}` : ''}</span>
       </div>
       <div ref={box} onPointerMove={(e) => { if (e.pointerType === 'mouse') poke() }} onMouseLeave={() => !touch && playing && !menu && setShowUi(false)}
         className={`overflow-hidden bg-black ${fake ? 'fixed inset-0 z-[100] h-[100dvh] w-screen' : fs ? 'h-full w-full' : 'relative mx-auto aspect-video max-h-[calc(100dvh-5.5rem)] w-full rounded-lg'} ${uiVisible ? '' : 'cursor-none'}`}>
@@ -325,7 +325,7 @@ export default function Watch() {
         )}
         {expanded && (
           <div className={`pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/80 to-transparent px-4 pb-8 pt-3 text-sm font-semibold transition-opacity ${uiVisible ? 'opacity-100' : 'opacity-0'}`} style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}>
-            {file?.group} {file?.season != null ? `· T${file.season} E${file.episode}` : ''}
+            {file?.group} {file?.season != null ? `· T${file.season} E${file.episode}` : file?.episode != null ? `· Episódio ${file.episode}` : ''}
           </div>
         )}
         {menu && info && (
