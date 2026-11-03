@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { CheckCircle2, ExternalLink, Film, HardDrive, LayoutGrid, Play, Search, Trash2, X } from 'lucide-react'
 import { api, fmtBytes, genrePt, progressOf, type CatalogItem, type GuideEpisode, type LibraryFile } from '../api'
@@ -7,7 +7,9 @@ import ContinueRow from '../components/ContinueRow'
 import { useToast } from '../components/Toast'
 import { Bar, Chip, PageTitle, PosterSkeleton, Score, Spinner } from '../components/ui'
 import { useAsync } from '../hooks'
-import { useForceTheme } from '../theme'
+
+type Scope = 'all' | 'cinema' | 'anime'
+const SCOPES: [Scope, string][] = [['all', 'Tudo'], ['cinema', 'Filmes e Séries'], ['anime', 'Animes']]
 
 type Group = { key: string; name: string; kind: string; files: LibraryFile[]; size: number; modified: number }
 type Meta = CatalogItem | null | undefined
@@ -131,8 +133,10 @@ function Detail({ g, meta, onClose, onChanged }: { g: Group; meta: Meta; onClose
   )
 }
 
-export default function Library({ scope }: { scope: 'cinema' | 'anime' }) {
-  useForceTheme(scope)
+export default function Library() {
+  const [params, setParams] = useSearchParams()
+  const raw = params.get('tab')
+  const scope: Scope = raw === 'cinema' || raw === 'anime' ? raw : 'all'
   const { data, loading, reload } = useAsync(() => api<LibraryFile[]>('/library'), [])
   const [q, setQ] = useState('')
   const [sort, setSort] = useState('recent')
@@ -153,7 +157,7 @@ export default function Library({ scope }: { scope: 'cinema' | 'anime' }) {
   const visible = groups.filter((g) => {
     const meta = metas[g.key]
     const eff = g.kind === 'GENERAL' ? (meta?.kind ?? 'GENERAL') : g.kind
-    const inScope = scope === 'anime' ? eff === 'ANIME' || eff === 'GENERAL' : eff === 'MOVIE' || eff === 'SERIES' || eff === 'GENERAL'
+    const inScope = scope === 'all' || eff === 'GENERAL' || (scope === 'anime' ? eff === 'ANIME' : eff === 'MOVIE' || eff === 'SERIES')
     return inScope && (!q || (g.name + ' ' + (meta?.title ?? '')).toLowerCase().includes(q.toLowerCase()))
   }).sort((a, b) => sort === 'az' ? a.name.localeCompare(b.name) : sort === 'size' ? b.size - a.size
     : sort === 'score' ? (metas[b.key]?.rating ?? 0) - (metas[a.key]?.rating ?? 0) : b.modified - a.modified)
@@ -165,8 +169,17 @@ export default function Library({ scope }: { scope: 'cinema' | 'anime' }) {
   return (
     <div>
       <PageTitle sub={loading ? undefined : `${visible.length} título(s) · ${scopeFiles.length} arquivo(s) · ${fmtBytes(total)}`}>
-        {scope === 'anime' ? 'Biblioteca de animes' : 'Minha biblioteca'}
+        Minha biblioteca
       </PageTitle>
+      <div className="mb-6 flex gap-6 border-b border-line/60">
+        {SCOPES.map(([k, label]) => (
+          <button key={k} onClick={() => setParams(k === 'all' ? {} : { tab: k }, { replace: true })}
+            className={`relative pb-3 text-sm font-semibold transition ${scope === k ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>
+            {label}
+            {scope === k && <motion.span layoutId="lib-tab" className="absolute inset-x-0 -bottom-px h-0.5 bg-accent-500" />}
+          </button>
+        ))}
+      </div>
       <ContinueRow files={scopeFiles} />
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <div className="relative min-w-[220px] flex-1 md:max-w-sm">

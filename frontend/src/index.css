@@ -2,13 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Tema "cinema": preto profundo com vermelho. Tema "anime": grafite azulado com azul. */
-:root,
-[data-theme='cinema'] {
-  --base: 9 9 11;
-  --surface: 22 22 26;
-  --surface2: 38 38 44;
-  --line: 52 52 60;
+/* Visual único: preto de streaming com vermelho. */
+:root {
+  --base: 20 20 20;
+  --surface: 32 32 34;
+  --surface2: 47 47 50;
+  --line: 64 64 70;
   --accent: 229 9 20;
   --accent-400: 248 85 94;
   --accent-600: 200 8 18;
@@ -18,36 +17,11 @@
   --font-sans: 'Inter';
 }
 
-[data-theme='anime'] {
-  --base: 17 20 30;
-  --surface: 25 29 42;
-  --surface2: 36 41 58;
-  --line: 52 59 80;
-  --accent: 59 130 246;
-  --accent-400: 125 176 252;
-  --accent-600: 37 99 235;
-  --accent-700: 29 78 216;
-  --glow: 56 189 248;
-  --font-display: 'Plus Jakarta Sans';
-  --font-sans: 'Plus Jakarta Sans';
-}
-
 html { scroll-behavior: smooth; }
 
 body {
   min-height: 100vh;
   background-color: rgb(var(--base));
-  transition: background-color 0.5s ease;
-}
-
-[data-theme='anime'] body {
-  background-image: none;
-  font-family: 'Plus Jakarta Sans', Inter, system-ui, sans-serif;
-}
-
-[data-theme='cinema'] body {
-  background-image: radial-gradient(60rem 28rem at 50% -12%, rgb(229 9 20 / 0.12), transparent 60%);
-  background-attachment: fixed;
 }
 
 .no-scrollbar::-webkit-scrollbar { display: none; }

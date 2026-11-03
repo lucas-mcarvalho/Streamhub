@@ -4,7 +4,6 @@ import { motion } from 'framer-motion'
 import { Search } from 'lucide-react'
 import { api, genrePt, type CatalogItem, type Genre } from '../api'
 import { btnGhost, Card, Notice, PageTitle, PosterSkeleton } from '../components/ui'
-import { useForceTheme } from '../theme'
 
 type Kind = 'MOVIE' | 'SERIES' | 'ANIME'
 
@@ -20,7 +19,6 @@ const TITLES: Record<Kind, [string, string]> = {
 }
 
 export default function Explore({ kind }: { kind: Kind }) {
-  useForceTheme(kind === 'ANIME' ? 'anime' : 'cinema')
   const [params] = useSearchParams()
   const [q, setQ] = useState('')
   const [term, setTerm] = useState('')
