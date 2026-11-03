@@ -120,6 +120,3 @@ export const progressOf = (id: string) => {
 
 export type DownloadFile = { index: number; name: string; size: number; progress: number; selected: boolean }
 
-export type ChannelSource = { id: number; name: string; origin?: string; url: string; builtin: boolean; position: number }
-export type Channel = { id: number; name: string; logo?: string; group: string; genres: string[]; hls: boolean; direct: boolean; playUrl: string }
-export const GENRE_ORDER = ['Desenho', 'Filmes', 'Séries', 'Esportes', 'Notícias', 'Música', 'Documentários', 'Entretenimento', 'Religioso', 'Educação', 'Culinária', 'Compras', 'Outros']
