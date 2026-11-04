@@ -85,7 +85,7 @@ export default function Layout({ onLogout }: { onLogout: () => void }) {
           <div className="ml-auto flex items-center gap-1 sm:gap-2">
             <SearchBox />
             <Link to="/downloads" title="Downloads" className={tool}><DownloadIcon count={activeDownloads} /></Link>
-            <Link to="/storage" title="Armazenamento" className={tool + ' max-sm:hidden'}><HardDrive size={19} /></Link>
+            <Link to="/storage" title="Armazenamento" className={tool}><HardDrive size={19} /></Link>
             <Link to="/settings" title="Configurações" className={tool}><Settings size={19} /></Link>
             <button onClick={logout} title="Sair" className={tool + ' max-sm:hidden'}><LogOut size={19} /></button>
           </div>

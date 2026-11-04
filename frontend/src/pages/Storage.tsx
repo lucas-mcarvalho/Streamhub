@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, fmtBytes, kindLabel, type Disk, type Location, type Root } from '../api'
+import { api, fmtBytes, kindLabel, type Discovery, type Disk, type Location, type MediaFolder, type Root } from '../api'
 import { Bar, btn, btnGhost, input, Modal, Notice, PageTitle, Spinner } from '../components/ui'
 import { useToast } from '../components/Toast'
 import { useAsync } from '../hooks'
@@ -63,6 +63,88 @@ function AddDisk({ onClose, onDone }: { onClose: () => void; onDone: () => void 
   )
 }
 
+/** Discos conectados e as pastas de mídia (Animes, Filmes, Séries) achadas em cada um, prontas para a biblioteca. */
+function MediaDisks({ onChanged }: { onChanged: () => void }) {
+  const toast = useToast()
+  const rep = useAsync(() => api<Discovery>('/storage/discover'), [])
+  const [kinds, setKinds] = useState<Record<string, string>>({})
+  const [busy, setBusy] = useState(false)
+
+  const kindOf = (f: MediaFolder) => kinds[f.path] ?? f.kind
+  const register = async (folders: MediaFolder[]) => {
+    setBusy(true)
+    try {
+      const done = await api<Location[]>('/storage/discover/register', {
+        method: 'POST', json: folders.map((f) => ({ rootIndex: f.rootIndex, relativePath: f.relativePath, kind: kindOf(f) })),
+      })
+      toast(done.length === 1 ? `"${done[0].name}" adicionada à biblioteca` : `${done.length} pastas adicionadas à biblioteca`)
+      rep.reload(); onChanged()
+    } catch (e) { toast((e as Error).message, 'err'); rep.reload() }
+    setBusy(false)
+  }
+  const setAuto = async (enabled: boolean) => {
+    try { await api('/storage/discover/auto', { method: 'PUT', json: { enabled } }); rep.reload(); if (enabled) onChanged() }
+    catch (e) { toast((e as Error).message, 'err') }
+  }
+
+  const data = rep.data
+  return (
+    <section className="mb-8">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h2 className="font-semibold">Discos e pastas de mídia</h2>
+        <button className={btnGhost} onClick={rep.reload} disabled={rep.loading}>Atualizar</button>
+      </div>
+      {rep.error && <Notice text={rep.error} />}
+      {rep.loading && !data ? <Spinner /> : data && (
+        <>
+          <label className="mb-3 flex items-start gap-2 rounded-lg bg-surface p-3 text-sm">
+            <input type="checkbox" className="mt-0.5" checked={data.autoRegister} onChange={(e) => setAuto(e.target.checked)} />
+            <span>Adicionar sozinho as pastas de mídia de discos conectados
+              <span className="block text-xs text-zinc-400">Confere a cada minuto. Pastas que você remover da lista não voltam.</span></span>
+          </label>
+          {data.warnings.map((w) => (
+            <p key={w.code} className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">⚠ {w.message}</p>
+          ))}
+          <div className="grid gap-3 md:grid-cols-2">
+            {data.sources.map((src) => {
+              const pending = src.folders.filter((f) => !f.locationId)
+              return (
+                <div key={src.path} className="rounded-lg bg-surface p-4">
+                  <div className="mb-2 flex justify-between gap-2 text-sm">
+                    <span className="truncate font-medium">{src.disk ? '💽' : '📁'} {src.name}</span>
+                    <span className="shrink-0 text-xs text-zinc-400">{src.fsType}</span>
+                  </div>
+                  <Bar percent={src.usage.total ? (src.usage.used / src.usage.total) * 100 : 0} />
+                  <div className="mt-1 text-xs text-zinc-400">{fmtBytes(src.usage.free)} livres de {fmtBytes(src.usage.total)}{!src.writable && ' · somente leitura'}</div>
+                  <ul className="mt-3 space-y-1.5">
+                    {src.folders.length === 0 && <li className="text-xs text-zinc-500">Nenhuma pasta Animes, Filmes ou Séries encontrada. Use “Registrar pasta” para escolher outra.</li>}
+                    {src.folders.map((f) => (
+                      <li key={f.path} className="flex items-center gap-2 text-sm">
+                        <span className="min-w-0 flex-1 truncate font-mono text-xs text-zinc-300" title={f.path}>{f.relativePath}</span>
+                        {f.locationId ? <span className="shrink-0 text-xs text-emerald-400">✓ na biblioteca · {kindLabel[f.kind]}</span> : (
+                          <>
+                            <select className="shrink-0 rounded border border-line bg-surface2 px-1.5 py-1 text-xs" value={kindOf(f)}
+                              onChange={(e) => setKinds({ ...kinds, [f.path]: e.target.value })}>
+                              {['ANIME', 'MOVIE', 'SERIES', 'GENERAL'].map((k) => <option key={k} value={k}>{kindLabel[k]}</option>)}
+                            </select>
+                            <button className={btnGhost + ' shrink-0 !px-2 !py-1 text-xs'} disabled={busy} onClick={() => register([f])}>Adicionar</button>
+                          </>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                  {pending.length > 1 && <button className={btn + ' mt-3 w-full'} disabled={busy} onClick={() => register(pending)}>Adicionar todas ({pending.length})</button>}
+                  {pending.some((f) => f.ignored) && <p className="mt-2 text-xs text-zinc-500">Pastas removidas antes não são adicionadas sozinhas, só por aqui.</p>}
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
 type Dir = { name: string; relativePath: string }
 
 function AddModal({ roots, onClose, onDone }: { roots: Root[]; onClose: () => void; onDone: () => void }) {
@@ -120,9 +202,10 @@ export default function Storage() {
   const roots = useAsync(() => api<Root[]>('/storage/roots'), [])
   const [adding, setAdding] = useState(false)
   const [addingDisk, setAddingDisk] = useState(false)
+  const [discoverKey, setDiscoverKey] = useState(0)   // remonta o painel de discos quando a lista de pastas muda por fora
 
   const act = async (fn: () => Promise<unknown>, ok: string) => {
-    try { await fn(); toast(ok); locs.reload() } catch (e) { toast((e as Error).message, 'err') }
+    try { await fn(); toast(ok); locs.reload(); setDiscoverKey((k) => k + 1) } catch (e) { toast((e as Error).message, 'err') }
   }
 
   return (
@@ -135,6 +218,8 @@ export default function Storage() {
         </div>
       </div>
       <p className="mb-4 text-sm text-zinc-400">Os discos e pastas listados são os do <b>servidor</b> que executa o backend, não do dispositivo do navegador.</p>
+
+      <MediaDisks key={discoverKey} onChanged={() => { locs.reload(); roots.reload() }} />
 
       <h2 className="mb-2 font-semibold">Raízes autorizadas</h2>
       {roots.loading ? <Spinner /> : (
@@ -176,8 +261,8 @@ export default function Storage() {
           </div>
         ))}
       </div>
-      {addingDisk && <AddDisk onClose={() => setAddingDisk(false)} onDone={() => { setAddingDisk(false); locs.reload(); roots.reload() }} />}
-      {adding && roots.data && <AddModal roots={roots.data} onClose={() => setAdding(false)} onDone={() => { setAdding(false); locs.reload() }} />}
+      {addingDisk && <AddDisk onClose={() => setAddingDisk(false)} onDone={() => { setAddingDisk(false); locs.reload(); roots.reload(); setDiscoverKey((k) => k + 1) }} />}
+      {adding && roots.data && <AddModal roots={roots.data} onClose={() => setAdding(false)} onDone={() => { setAdding(false); locs.reload(); setDiscoverKey((k) => k + 1) }} />}
     </div>
   )
 }

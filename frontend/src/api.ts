@@ -22,6 +22,9 @@ export type Location = {
 }
 export type Disk = { name: string; fsType: string; rootIndex: number; relativePath: string; usage: Usage; writable: boolean }
 export type Root = { index: number; path: string; exists: boolean; usage: Usage }
+export type MediaFolder = { name: string; path: string; rootIndex: number; relativePath: string; kind: string; locationId?: number; ignored: boolean }
+export type DiskSource = { name: string; path: string; fsType: string; disk: boolean; usage: Usage; writable: boolean; folders: MediaFolder[] }
+export type Discovery = { autoRegister: boolean; sources: DiskSource[]; warnings: { code: string; message: string }[] }
 export type Download = {
   id: number; title: string; kind: string; indexer?: string; status: string; progress: number; sizeBytes: number
   downloadedBytes: number; dlSpeed: number; upSpeed: number; etaSeconds?: number; destination: string

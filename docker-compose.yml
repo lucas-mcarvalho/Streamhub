@@ -35,6 +35,7 @@ services:
       APP_ADMIN_PASSWORD: ${APP_ADMIN_PASSWORD:-admin}
       APP_SECRET: ${APP_SECRET:-change-me-in-production}
       STORAGE_ALLOWED_ROOTS: /media,/hd1,/disks
+      STORAGE_DISKS_HOST_DIR: ${DISKS_DIR:-./disks}   # só para mostrar o caminho certo do disco nas dicas da tela
       TMDB_API_KEY: ${TMDB_API_KEY:-}
       PROWLARR_URL: http://prowlarr:9696
       SONARR_URL: http://sonarr:8989
