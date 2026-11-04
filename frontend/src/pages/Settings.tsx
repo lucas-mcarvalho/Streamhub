@@ -75,38 +75,45 @@ function AddIndexer({ onClose, onDone }: { onClose: () => void; onDone: () => vo
   )
 }
 
-type Limits = { maxListMb: number; minMb: number; maxMb: number; defaultMb: number }
+type Accel = {
+  mode: 'auto' | 'cpu'
+  active: { kind: 'VAAPI' | 'NVENC' | 'CPU'; device?: string; label: string }
+  available: { kind: string; device?: string; label: string }[]
+}
 
-function ChannelSettings() {
+function PlaybackSettings() {
   const toast = useToast()
-  const { data, reload } = useAsync(() => api<Limits>('/channels/settings'), [])
-  const [mb, setMb] = useState(48)
-  useEffect(() => { if (data) setMb(data.maxListMb) }, [data])
+  const { data, setData } = useAsync(() => api<Accel>('/library/accel'), [])
+  const [busy, setBusy] = useState(false)
   if (!data) return null
-  const dirty = mb !== data.maxListMb
-  const save = async () => {
-    try { await api('/channels/settings', { method: 'PUT', json: { maxListMb: mb } }); toast(`Limite ajustado para ${mb} MB`); reload() }
+  const save = async (json: { mode?: string; redetect?: boolean }, ok: string) => {
+    setBusy(true)
+    try { setData(await api<Accel>('/library/accel', { method: 'PUT', json })); toast(ok) }
     catch (e) { toast((e as Error).message, 'err') }
+    finally { setBusy(false) }
   }
   return (
     <div className="mb-8">
-      <h2 className="mb-2 text-lg font-semibold">TV ao vivo</h2>
+      <h2 className="mb-2 text-lg font-semibold">Reprodução</h2>
       <div className="glass rounded-2xl p-4">
-        <label className="mb-1 block text-sm font-medium">Tamanho máximo de cada lista de canais (M3U)</label>
+        <label className="mb-1 block text-sm font-medium">Aceleração de vídeo</label>
         <p className="mb-3 text-xs text-zinc-400">
-          Listas maiores que o limite são recusadas com "Lista grande demais". O servidor carrega a lista inteira na memória para analisá-la,
-          então valores altos aumentam o uso de memória e deixam a abertura da lista mais lenta. As listas de teste mais comuns têm de 20 KB a 10 MB.
+          Vídeos que o navegador não toca direto (como HEVC 10 bits) são convertidos no servidor. Pela GPU, a conversão quase não usa o processador;
+          sem GPU, o processador converte em ritmo limitado, só um pouco à frente do que está sendo assistido.
         </p>
-        <div className="flex flex-wrap items-center gap-4">
-          <input type="range" min={data.minMb} max={data.maxMb} step={1} value={mb} onChange={(e) => setMb(Number(e.target.value))} className="min-w-[200px] flex-1 accent-accent-500" />
-          <div className="flex items-center gap-2">
-            <input type="number" min={data.minMb} max={data.maxMb} value={mb} onChange={(e) => setMb(Math.max(data.minMb, Math.min(data.maxMb, Number(e.target.value) || data.minMb)))} className={input + ' !w-24'} />
-            <span className="text-sm text-zinc-400">MB</span>
-          </div>
-          <button className={btn} disabled={!dirty} onClick={save}>Salvar</button>
-          <button className={btnGhost} disabled={mb === data.defaultMb} onClick={() => setMb(data.defaultMb)}>Padrão ({data.defaultMb} MB)</button>
+        <div className="flex flex-wrap items-center gap-3">
+          <select value={data.mode} disabled={busy} onChange={(e) => save({ mode: e.target.value }, 'Aceleração de vídeo atualizada')} className={input + ' !w-auto'}>
+            <option value="auto">Automática (usa a GPU quando houver)</option>
+            <option value="cpu">Desligada (sempre o processador)</option>
+          </select>
+          <button className={btnGhost} disabled={busy} onClick={() => save({ redetect: true }, 'Detecção concluída')}>Detectar GPU novamente</button>
         </div>
-        <p className="mt-2 text-xs text-zinc-500">Faixa permitida: {data.minMb} a {data.maxMb} MB. A mudança vale na hora, sem reiniciar.</p>
+        <p className="mt-3 text-sm">Em uso agora: <span className={data.active.kind === 'CPU' ? 'text-amber-400' : 'text-emerald-400'}>{data.active.label}</span></p>
+        <p className="mt-1 text-xs text-zinc-500">
+          {data.available.length
+            ? `GPUs disponíveis: ${data.available.map((a) => a.label).join(', ')}. A conversão em andamento continua como começou; a mudança vale ao abrir ou pular o vídeo.`
+            : 'Nenhuma GPU disponível para o servidor. Para usar a GPU integrada (Intel/AMD) ou NVIDIA, ative o arquivo docker-compose correspondente (veja o README).'}
+        </p>
       </div>
     </div>
   )
@@ -127,7 +134,7 @@ export default function Settings() {
       <p className="mb-3 text-sm text-zinc-400">Credenciais são guardadas cifradas no banco. Chaves do Prowlarr/Sonarr/Radarr são lidas automaticamente do config.xml quando disponível.</p>
       <div className="mb-8 space-y-3">{ints.loading ? <Spinner /> : ints.data?.map((i) => <IntegrationRow key={i.service} it={i} onSaved={ints.reload} />)}</div>
 
-      <ChannelSettings />
+      <PlaybackSettings />
 
       <div className="mb-2 flex items-center justify-between">
         <h2 className="text-lg font-semibold">Indexadores (Prowlarr)</h2>

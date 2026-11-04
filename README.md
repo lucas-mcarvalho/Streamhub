@@ -1,8 +1,9 @@
 # StreamHub
 
-Aplicação web para **pesquisar, baixar, organizar e assistir filmes, séries e animes** em um só lugar, com interface moderna e dois visuais próprios: um para **Filmes & Séries** e outro para **Animes**.
+Aplicação web para **pesquisar, baixar, organizar e assistir filmes, séries e animes** em um só lugar, numa única tela no estilo dos serviços de streaming, com as abas **Filmes e Séries** e **Animes**.
 
-![Tela inicial](docs/screenshots/gateway.jpg)
+> O player de listas IPTV virou um projeto separado: **Streamhub-IPTV**.
+
 
 > Use o StreamHub somente com conteúdo que você tem autorização para obter e reproduzir. O projeto é uma ferramenta de gerenciamento; a responsabilidade pelo conteúdo é de quem a utiliza.
 
@@ -14,6 +15,7 @@ Aplicação web para **pesquisar, baixar, organizar e assistir filmes, séries e
 - [Início rápido](#início-rápido)
 - [Configuração](#configuração)
 - [Armazenamento e Docker](#armazenamento-e-docker)
+- [Aceleração de vídeo (GPU)](#aceleração-de-vídeo-gpu)
 - [Fluxo de uso](#fluxo-de-uso)
 - [API](#api)
 - [Desenvolvimento](#desenvolvimento)
@@ -23,7 +25,7 @@ Aplicação web para **pesquisar, baixar, organizar e assistir filmes, séries e
 ## Recursos
 
 **Catálogo**
-- Dois visuais próprios: **Filmes & Séries** (preto e vermelho, barra superior) e **Animes** (grafite com azul, menu em pílula e banner em tela cheia). Um botão alterna entre eles.
+- Uma única tela no estilo Netflix: destaque em tela cheia, fileiras horizontais e Top 10 numerado, com as abas **Filmes e Séries** e **Animes** no cabeçalho. A biblioteca também separa por aba.
 - Filmes e séries pelo **TMDB**; animes pelo **AniList**.
 - Capas, sinopse, **nota**, **gêneros**, ano, formato, estúdio, temporadas e episódios.
 - Filmes e séries mostram **diretores (ou criadores) e elenco principal** com foto.
@@ -44,11 +46,6 @@ Aplicação web para **pesquisar, baixar, organizar e assistir filmes, séries e
 - Raízes autorizadas, pastas registradas por tipo (filme, série, anime, geral) e pasta padrão por tipo.
 - Teste de gravação, aviso de pouco espaço e proteção contra *path traversal* e symlinks.
 
-**TV ao vivo** (recurso de teste)
-- Listas públicas de canais abertos do **iptv-org** (Brasil, português, infantil, animação, esportes, filmes e notícias) e suporte a **qualquer lista M3U** que você adicionar.
-- Player HLS no navegador, busca, filtro por grupo e favoritos. O StreamHub faz o proxy dos streams (resolve CORS e conteúdo misto), com URLs assinadas e bloqueio de endereços da rede local.
-- A disponibilidade dos canais varia: listas públicas mudam e falham com frequência.
-
 **Biblioteca e player próprio**
 - Grade de pôsteres com nota, gêneros e progresso por episódio; painel de detalhes por título; "Continuar assistindo".
 - Tela **Ver episódios** por título: grade com capa, número e nome de cada episódio, selo de **Assistido**, progresso, seletor de temporada, busca e ordem; dá para marcar/desmarcar como assistido.
@@ -56,7 +53,7 @@ Aplicação web para **pesquisar, baixar, organizar e assistir filmes, séries e
 - Player com **troca de faixa de áudio**, **legendas** (PT-BR escolhida automaticamente quando existe), velocidade, tela cheia, atalhos de teclado e **próximo episódio**.
 - Em **Configurações do player > Legenda**, use **Adiantar/Atrasar 0,5 s** para sincronizar a legenda. O ajuste fica salvo por episódio neste navegador; **Restaurar sincronização** volta a zero. Legendas simultâneas são exibidas juntas.
 - O ícone de **Downloads** mostra em tempo real quantos downloads estão baixando ou aguardando na fila, nos dois modos da interface. Pausados, concluídos, com erro e aguardando escolha de episódios ficam fora do contador.
-- **Conversão no servidor (ffmpeg)** para formatos que o navegador não toca.
+- **Conversão no servidor (ffmpeg)** para formatos que o navegador não toca, pela **GPU** (Intel/AMD ou NVIDIA) quando disponível e em ritmo limitado para poupar o processador. Veja [Aceleração de vídeo (GPU)](#aceleração-de-vídeo-gpu).
 - Exclusão de arquivos pela biblioteca.
 
 **Integrações opcionais**: Sonarr e Radarr (importação), Jellyfin (atualização da biblioteca e "continuar assistindo").
@@ -100,10 +97,18 @@ Frontend em `frontend/` (React, TypeScript, Vite, Tailwind, Framer Motion, Lucid
 ```bash
 git clone https://github.com/lucas-mcarvalho/Streamhub.git
 cd Streamhub
-cp .env.example .env          # edite TMDB_API_KEY, senhas e APP_SECRET
-mkdir -p media data           # no Linux, as pastas devem pertencer ao seu usuário
-docker compose up -d --build
+./scripts/setup.sh            # Linux/WSL: prepara tudo e sobe os contêineres
 ```
+
+O `setup.sh` pode ser executado de novo a qualquer momento. Ele:
+- cria o `.env` a partir do `.env.example` (com `APP_SECRET` aleatório) e ajusta `PUID`/`PGID` ao seu usuário;
+- encontra o HD externo com pastas `Animes`/`Series`/`Filmes` (em `/mnt/X` no WSL, `/run/media/$USER` ou `/media/$USER`) e o define em `EXTRA_STORAGE`; para escolher outro, rode `./scripts/setup.sh /caminho/do/hd`;
+- cria `data/`, `media/` e `disks/` com o dono certo (se o Docker criá-las, ficam como root e o Jellyfin não grava);
+- deixa a montagem `/` compartilhada, exigida pelo volume `/disks` (no WSL, também em `/etc/wsl.conf` para os próximos boots);
+- grava o login do qBittorrent com `QBIT_USER`/`QBIT_PASSWORD` e libera o acesso pela porta 8081;
+- sobe os contêineres e mostra o endereço para abrir no celular.
+
+Edite `TMDB_API_KEY` e as senhas no `.env` antes de usar de verdade. Sem o script: `cp .env.example .env`, `mkdir -p media data disks` e `docker compose up -d --build`.
 
 Acesse **http://localhost:5173** e entre com `APP_ADMIN_USER` / `APP_ADMIN_PASSWORD` (padrão `admin` / `admin`; **troque em produção**).
 
@@ -114,13 +119,13 @@ Acesse **http://localhost:5173** e entre com `APP_ADMIN_USER` / `APP_ADMIN_PASSW
 | Prowlarr | http://localhost:9696 | crie o usuário na primeira vez |
 | Sonarr | http://localhost:8989 | opcional |
 | Radarr | http://localhost:7878 | opcional |
-| qBittorrent | http://localhost:8081 | `admin` / `adminadmin` (pré-configurado) |
+| qBittorrent | http://localhost:8081 | `QBIT_USER` / `QBIT_PASSWORD` (gravados pelo `setup.sh`) |
 | Jellyfin | http://localhost:8096 | opcional; exige o assistente inicial |
 
 **Primeiros passos dentro do app**
 1. Em **Configurações**, informe a chave do TMDB (grátis em [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api)). Animes funcionam sem chave.
 2. Em **Configurações > Indexadores**, adicione ao menos um indexador.
-3. Em **Armazenamento**, registre as pastas de destino (por exemplo `Filmes`, `Series`, `Animes`).
+3. Em **Armazenamento**, confira as pastas de destino. Na primeira execução, o backend registra sozinho as pastas `Animes`, `Series`/`Séries` e `Filmes`/`Movies` encontradas até dois níveis abaixo de `/media`, `/hd1` e `/disks`.
 4. Abra um título, use **Buscar downloads** e clique em **Baixar**.
 
 ## Configuração
@@ -142,8 +147,6 @@ Todas as variáveis ficam no arquivo `.env` (modelo em `.env.example`).
 | `JELLYFIN_PUBLIC_URL` | `http://localhost:8096` | endereço do Jellyfin visto pelo navegador |
 | `ARR_IMPORT_ON_COMPLETE` | `false` | se `true`, Sonarr/Radarr importam (copiando) ao concluir |
 
-O tamanho máximo das listas de canais (M3U) é ajustável em **Configurações > TV ao vivo** (1 a 200 MB; padrão 48 MB) e vale na hora, sem reiniciar. Listas maiores usam mais memória.
-
 Variáveis avançadas do backend: `STORAGE_ALLOWED_ROOTS` (padrão `/media`), `STORAGE_MIN_FREE_GB` (aviso de pouco espaço) e `QBIT_PATH_MAP` (`/prefixo_backend=/prefixo_qbit`).
 
 As credenciais das integrações também podem ser editadas em **Configurações**; ficam **cifradas** (AES-GCM) no banco. As chaves de API de Prowlarr, Sonarr e Radarr são lidas automaticamente do `config.xml` (volume `DATA_ROOT` montado em `/integrations`).
@@ -157,6 +160,37 @@ As credenciais das integrações também podem ser editadas em **Configurações
 - **Biblioteca por fora:** vídeos copiados manualmente para uma pasta registrada (`Nome do Título (Ano)/Titulo.S01E01.mkv`) aparecem sozinhos na biblioteca.
 - **Windows:** aponte `MEDIA_ROOT` para algo como `D:/Midia`; discos extras entram como volumes adicionais.
 
+## Aceleração de vídeo (GPU)
+
+Vídeos que o navegador não reproduz direto (por exemplo, HEVC/x265 10 bits, comum em animes) são convertidos para H.264 pelo servidor enquanto você assiste. O StreamHub testa o que existe no computador ao iniciar e escolhe sozinho, nesta ordem:
+
+| Computador | Conversão | Uso do processador |
+|---|---|---|
+| GPU integrada Intel (7ª geração ou mais nova) ou AMD Ryzen | VAAPI | muito baixo |
+| GPU NVIDIA | NVENC | baixo |
+| Sem GPU disponível para o Docker | processador (libx264) | médio |
+
+Em todos os casos, a conversão entrega os primeiros 30 segundos o mais rápido possível e depois segue só 1,5× à frente da reprodução, sem ocupar o processador inteiro. Se a GPU não decodificar o formato de um arquivo, o processador decodifica e a GPU só codifica.
+
+Sem configuração extra, o Docker não dá acesso à GPU, e a conversão usa o processador. Para ativar, acrescente ao `.env`:
+
+**GPU integrada Intel ou AMD** (Linux):
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
+RENDER_GID=987   # o número do seu sistema: getent group render | cut -d: -f3
+```
+
+**GPU NVIDIA** (requer o [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)):
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.nvidia.yml
+```
+
+Depois rode `docker compose up -d --build`. Em **Configurações > Reprodução** aparece a opção em uso, com o botão **Detectar GPU novamente** e a opção de desligar a aceleração. Em notebooks com as duas GPUs, prefira a integrada: ela costuma ser mais rápida para isso e gasta menos energia.
+
+No Windows e no macOS (Docker Desktop), a GPU integrada não fica acessível ao Docker. No Windows, a NVIDIA funciona via WSL2 com o arquivo `docker-compose.nvidia.yml`; nos demais casos, a conversão usa o processador.
+
 ## Velocidade dos downloads
 
 A velocidade depende principalmente dos **seeders** do release. Para baixar mais rápido:
@@ -167,7 +201,15 @@ A velocidade depende principalmente dos **seeders** do release. Para baixar mais
 
 ## Acesso pelo celular
 
-Na mesma rede Wi-Fi, abra `http://IP-DO-COMPUTADOR:5173` no navegador do celular (descubra o IP com `ip -4 addr`). Se não abrir, libere a porta (`sudo ufw allow 5173/tcp`) e confira se o roteador/repetidor não isola os aparelhos. Troque a senha padrão (`APP_ADMIN_PASSWORD`) e ajuste `JELLYFIN_PUBLIC_URL` para o IP do computador.
+Na mesma rede Wi-Fi, abra `http://IP-DO-COMPUTADOR:5173` no navegador do celular (o `setup.sh` mostra o endereço). Se não abrir, libere a porta (`sudo ufw allow 5173/tcp`) e confira se o roteador/repetidor não isola os aparelhos.
+
+**Windows com WSL:** por padrão o WSL só expõe as portas para o próprio PC. Rode uma vez, no PowerShell **como administrador**:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File \\wsl.localhost\<distro>\<caminho>\Streamhub\scripts\setup-windows.ps1
+```
+
+O script ativa a rede espelhada do WSL (`networkingMode=mirrored` no `%USERPROFILE%\.wslconfig`), libera as portas 5173, 8096 e 6881 no firewall do Windows e do Hyper-V **apenas em redes privadas** e reinicia o WSL. A rede do Windows precisa estar marcada como **Privada**. Troque a senha padrão (`APP_ADMIN_PASSWORD`) e ajuste `JELLYFIN_PUBLIC_URL` para o IP do computador.
 
 O qBittorrent do compose vem sem limite de velocidade, com DHT/PEX/LSD ativos e conexões ampliadas (`2000` no total, `300` por torrent).
 
@@ -194,8 +236,6 @@ Autenticação HTTP Basic. Principais grupos de rotas:
 | `POST /api/downloads` · `GET /api/downloads/stream` | iniciar download · progresso (SSE) |
 | `GET/POST /api/downloads/{id}/files` | listar arquivos do torrent e escolher quais baixar |
 | `GET /api/library` · `POST /api/library/delete` | arquivos e exclusão |
-| `GET/POST /api/channels/sources` · `GET /api/channels?source=` | listas M3U e canais |
-| `GET /api/channels/proxy` | proxy HLS assinado (TV ao vivo) |
 | `GET /api/library/stream/{id}[/transcode\|/subtitle/{n}]` | reprodução com token assinado |
 
 ## Desenvolvimento
@@ -219,7 +259,9 @@ O frontend em desenvolvimento encaminha `/api` para `http://localhost:8080` (var
 | "Nenhum indexador ativo" | adicione um indexador em Configurações |
 | `429 Too Many Requests` do AniList | limite de requisições; o servidor mantém cache de 10 min, aguarde um instante |
 | Erro 400 ao adicionar indexador | o site do indexador pode estar fora do ar ou exigir login; a mensagem do Prowlarr é exibida |
-| qBittorrent "usuário ou senha inválidos" | ajuste `QBIT_USER`/`QBIT_PASSWORD` ou edite em Configurações |
+| qBittorrent "usuário ou senha inválidos" | rode `./scripts/setup.sh` (grava a senha do `.env`) ou ajuste `QBIT_USER`/`QBIT_PASSWORD` em Configurações |
+| Contêiner com "not a shared or slave mount" | rode `./scripts/setup.sh` (deixa a montagem `/` compartilhada) |
+| Biblioteca vazia com o HD conectado | `EXTRA_STORAGE` aponta para outro lugar ou o HD não tem pasta registrada em Armazenamento |
 | Sem permissão de gravação | confira `PUID`/`PGID` e o dono das pastas `media/` e `data/` |
 | Download lento | poucos seeders no release; veja [Velocidade dos downloads](#velocidade-dos-downloads) |
 | Vídeo sem som ou não toca | áudio/vídeo incompatível: o player converte no servidor; se persistir, use o Jellyfin |

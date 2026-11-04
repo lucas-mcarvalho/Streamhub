@@ -11,6 +11,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -23,10 +25,12 @@ import com.streamhub.integrations.JellyfinClient;
 public class LibraryController {
     private final LibraryService service;
     private final JellyfinClient jellyfin;
+    private final VideoAccel accel;
 
-    public LibraryController(LibraryService service, JellyfinClient jellyfin) {
+    public LibraryController(LibraryService service, JellyfinClient jellyfin, VideoAccel accel) {
         this.service = service;
         this.jellyfin = jellyfin;
+        this.accel = accel;
     }
 
     @GetMapping
@@ -67,15 +71,22 @@ public class LibraryController {
                                                            @RequestParam(defaultValue = "0") double start,
                                                            @RequestParam(defaultValue = "0") int audio) {
         service.verifyToken(id, token);
-        Process pr = service.startTranscode(id, Math.max(0, start), audio);
-        StreamingResponseBody body = out -> {
-            try (var in = pr.getInputStream()) {
-                in.transferTo(out);
-            } finally {
-                pr.destroyForcibly();
-            }
-        };
+        LibraryService.Transcode t = service.startTranscode(id, Math.max(0, start), audio);
+        StreamingResponseBody body = out -> service.pipe(t, out);
         return ResponseEntity.ok().contentType(MediaType.parseMediaType("video/mp4")).body(body);
+    }
+
+    /** Como o servidor converte vídeo (GPU ou processador) e o modo escolhido. */
+    @GetMapping("/accel")
+    public VideoAccel.Status accel() { return accel.status(); }
+
+    public record AccelRequest(String mode, Boolean redetect) {}
+
+    @PutMapping("/accel")
+    public VideoAccel.Status setAccel(@RequestBody AccelRequest req) {
+        if (req.mode() != null) accel.setMode(req.mode());
+        if (Boolean.TRUE.equals(req.redetect())) accel.redetect();
+        return accel.status();
     }
 
     @GetMapping(value = "/stream/{id}/subtitle/{index}", produces = "text/vtt;charset=UTF-8")

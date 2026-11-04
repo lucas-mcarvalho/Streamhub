@@ -1,161 +1,114 @@
-import { useEffect, useState } from 'react'
-import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
-import { Clapperboard, Download, Film, HardDrive, Home, Library, LogOut, type LucideIcon, Radio, Search, Settings, Sparkles, Swords, Tv } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { AnimatePresence, motion } from 'framer-motion'
+import { Download, HardDrive, LogOut, Search, Settings, X } from 'lucide-react'
 import { auth } from '../api'
-import { useTheme } from '../theme'
 import Footer from './Footer'
 import { useDownloads } from './DownloadsProvider'
 
-type Item = { to: string; label: string; icon: LucideIcon; end?: boolean }
+type Tab = { to: string; label: string; match: (path: string) => boolean }
 
-const cinemaNav: Item[] = [
-  { to: '/cinema', label: 'Início', icon: Home, end: true },
-  { to: '/movies', label: 'Filmes', icon: Film },
-  { to: '/series', label: 'Séries', icon: Tv },
-  { to: '/cinema/library', label: 'Minha biblioteca', icon: Library },
+/** Tela principal única (Filmes e Séries, com a aba Animes dentro dela). */
+const TABS: Tab[] = [
+  { to: '/', label: 'Início', match: (p) => p === '/' || p === '/movies' || p === '/series' || p.startsWith('/animes') },
 ]
-const common: Item[] = [
-  { to: '/tv', label: 'TV ao vivo', icon: Radio },
-  { to: '/downloads', label: 'Downloads', icon: Download },
-  { to: '/storage', label: 'Armazenamento', icon: HardDrive },
-  { to: '/settings', label: 'Configurações', icon: Settings },
+const LINKS: Tab[] = [
+  { to: '/library', label: 'Minha biblioteca', match: (p) => p.startsWith('/library') || p.startsWith('/episodes') },
 ]
 
-function SearchBox({ className = '' }: { className?: string }) {
+function SearchBox() {
+  const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
+  const ref = useRef<HTMLInputElement>(null)
   const nav = useNavigate()
+  useEffect(() => { if (open) ref.current?.focus() }, [open])
   return (
-    <form className={`relative ${className}`} onSubmit={(e) => { e.preventDefault(); if (q.trim()) nav('/search?q=' + encodeURIComponent(q.trim())) }}>
-      <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Pesquisar…"
-        className="w-full rounded-full border border-line bg-surface/70 py-2 pl-9 pr-4 text-sm outline-none transition focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20 md:w-56 md:focus:w-72" />
+    <form className="flex items-center" onSubmit={(e) => { e.preventDefault(); if (q.trim()) nav('/search?q=' + encodeURIComponent(q.trim())) }}>
+      <AnimatePresence initial={false}>
+        {open ? (
+          <motion.div key="box" initial={{ width: 36, opacity: 0.6 }} animate={{ width: 'auto', opacity: 1 }} exit={{ width: 36, opacity: 0 }}
+            className="flex items-center gap-2 border border-white/70 bg-black/80 px-2 py-1">
+            <Search size={18} className="shrink-0" />
+            <input ref={ref} value={q} onChange={(e) => setQ(e.target.value)} onBlur={() => { if (!q) setOpen(false) }}
+              placeholder="Títulos, animes, séries…" className="w-36 bg-transparent text-sm outline-none placeholder:text-zinc-400 sm:w-56" />
+            {q && <button type="button" onClick={() => setQ('')} aria-label="Limpar"><X size={16} /></button>}
+          </motion.div>
+        ) : (
+          <button key="btn" type="button" onClick={() => setOpen(true)} title="Pesquisar" className="grid h-9 w-9 place-items-center text-zinc-100 transition hover:text-zinc-300"><Search size={20} /></button>
+        )}
+      </AnimatePresence>
     </form>
-  )
-}
-
-function ModeSwitch() {
-  const { theme } = useTheme()
-  const nav = useNavigate()
-  const toAnime = theme === 'cinema'
-  return (
-    <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} onClick={() => nav(toAnime ? '/anime' : '/cinema')}
-      className="flex items-center gap-2 rounded-full bg-gradient-to-r from-accent-600 to-glow px-3.5 py-1.5 text-xs font-bold text-white shadow-lg shadow-accent-600/30">
-      {toAnime ? <Swords size={14} /> : <Clapperboard size={14} />}
-      <span className="hidden sm:inline">{toAnime ? 'Modo Anime' : 'Filmes & Séries'}</span>
-    </motion.button>
-  )
-}
-
-function Logo({ anime }: { anime?: boolean }) {
-  const nav = useNavigate()
-  return (
-    <button onClick={() => nav('/')} className="flex items-center gap-2" title="Tela inicial">
-      <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-accent-500 to-glow text-white shadow-lg shadow-accent-600/40">
-        {anime ? <Swords size={18} /> : <Clapperboard size={18} />}
-      </span>
-      <span className="font-display text-2xl font-bold tracking-wider">Stream<span className="text-accent-500">Hub</span></span>
-    </button>
   )
 }
 
 function DownloadIcon({ count }: { count: number }) {
   return <span className="relative inline-flex shrink-0" role="img" aria-label={`Downloads: ${count} em andamento`}>
-    <Download size={16} aria-hidden="true" />
-    {count > 0 && <span aria-hidden="true" className="absolute -right-2.5 -top-2.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-600 px-1 text-[10px] font-bold leading-none text-white ring-2 ring-canvas">{count > 99 ? '99+' : count}</span>}
+    <Download size={19} aria-hidden="true" />
+    {count > 0 && <span aria-hidden="true" className="absolute -right-2.5 -top-2.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-600 px-1 text-[10px] font-bold leading-none text-white">{count > 99 ? '99+' : count}</span>}
   </span>
 }
 
 export default function Layout({ onLogout }: { onLogout: () => void }) {
   const downloads = useDownloads()
   const activeDownloads = downloads?.filter((d) => d.status === 'DOWNLOADING' || d.status === 'QUEUED').length ?? 0
-  const { theme } = useTheme()
   const loc = useLocation()
-  const go = useNavigate()
   const [scrolled, setScrolled] = useState(false)
   useEffect(() => {
-    const f = () => setScrolled(window.scrollY > 60)
+    const f = () => setScrolled(window.scrollY > 40)
     f()
     window.addEventListener('scroll', f, { passive: true })
     return () => window.removeEventListener('scroll', f)
   }, [])
   const logout = () => { auth.clear(); onLogout() }
-  const page = (
-    <motion.div key={loc.pathname} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35, ease: 'easeOut' }}>
-      <Outlet />
-    </motion.div>
-  )
+  // as telas iniciais das abas ocupam a tela toda, com o cabeçalho transparente sobre o destaque
+  const fullBleed = loc.pathname === '/'
+  const solid = scrolled || !fullBleed
+  const tool = 'grid h-9 w-9 place-items-center text-zinc-100 transition hover:text-zinc-300'
 
-  if (theme === 'anime') {
-    const onExplore = loc.pathname === '/anime/explore'
-    const sort = new URLSearchParams(loc.search).get('sort')
-    const items: { to: string; label: string; icon: LucideIcon; active: boolean }[] = [
-      { to: '/anime', label: 'Início', icon: Home, active: loc.pathname === '/anime' },
-      { to: '/anime/library', label: 'Biblioteca', icon: Library, active: loc.pathname === '/anime/library' },
-      { to: '/anime/explore?search=1', label: 'Pesquisar', icon: Search, active: onExplore && sort !== 'AIRING' },
-      { to: '/anime/explore?sort=AIRING', label: 'Lançamentos', icon: Sparkles, active: onExplore && sort === 'AIRING' },
-    ]
-    const tools: { to: string; label: string; icon: LucideIcon; hideMobile?: boolean }[] = [
-      { to: '/downloads', label: 'Downloads', icon: Download },
-      { to: '/storage', label: 'Armazenamento', icon: HardDrive, hideMobile: true },
-      { to: '/settings', label: 'Configurações', icon: Settings },
-    ]
-    const home = loc.pathname === '/anime'
-    return (
-      <div className="min-h-screen">
-        <header className="fixed inset-x-0 top-0 z-40 grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 py-3 md:px-8">
-          <div className="flex items-center">
-            <button onClick={() => go('/')} title="Tela inicial" className="grid h-10 w-10 place-items-center rounded-full bg-accent-500 text-white shadow-lg shadow-accent-500/30 transition hover:scale-105"><Swords size={18} /></button>
-          </div>
-          <nav className="flex items-center gap-0.5 rounded-2xl border border-white/10 bg-black/50 px-1.5 py-1.5 shadow-xl backdrop-blur-xl">
-            {items.map((n) => (
-              <Link key={n.label} to={n.to} className="relative rounded-xl px-2.5 py-2 text-sm font-semibold md:px-3.5">
-                <span className={`relative z-10 flex items-center gap-2 transition ${n.active ? 'text-white' : 'text-zinc-400 hover:text-white'}`}><n.icon size={16} /><span className="hidden md:inline">{n.label}</span></span>
-                {n.active && <motion.span layoutId="anime-underline" className="absolute inset-x-2 -bottom-0.5 h-0.5 rounded-full bg-accent-500" />}
-              </Link>
-            ))}
-          </nav>
-          <div className="flex items-center justify-end gap-1.5">
-            <ModeSwitch />
-            {tools.map((t) => (
-              <Link key={t.to} to={t.to} title={t.label} className={`grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-black/40 text-zinc-300 backdrop-blur transition hover:border-accent-500 hover:text-accent-400 ${t.hideMobile ? 'hidden md:grid' : t.to === '/downloads' ? 'grid' : 'hidden sm:grid'}`}>{t.to === '/downloads' ? <DownloadIcon count={activeDownloads} /> : <t.icon size={16} />}</Link>
-            ))}
-            <button onClick={logout} title="Sair" className="hidden h-9 w-9 place-items-center rounded-full border border-white/10 bg-black/40 text-zinc-300 backdrop-blur transition hover:border-accent-500 hover:text-accent-400 sm:grid"><LogOut size={16} /></button>
-          </div>
-          <div className={`pointer-events-none absolute inset-x-0 top-0 -z-10 h-24 bg-gradient-to-b from-canvas via-canvas/80 to-transparent transition-opacity duration-300 ${!home || scrolled ? 'opacity-100' : 'opacity-0'}`} />
-        </header>
-        <main className={home ? '' : 'mx-auto max-w-[1500px] px-4 pb-12 pt-24 md:px-8'}>{page}</main>
-        <Footer />
-      </div>
-    )
-  }
-
-  const nav = [...cinemaNav, ...common]
   return (
     <div className="min-h-screen">
-      <header className="sticky top-0 z-30 border-b border-line/50 bg-canvas/75 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
-          <Logo />
-          <nav className="no-scrollbar flex gap-1 overflow-x-auto text-sm">
-            {nav.map((n) => (
-              <NavLink key={n.to} to={n.to} end={n.end} className="relative whitespace-nowrap px-3 py-1.5 font-medium">
-                {({ isActive }) => (
-                  <>
-                    <span className={`relative z-10 inline-flex items-center gap-2 ${isActive ? 'text-white' : 'text-zinc-400 hover:text-white'}`}>{n.to === '/downloads' && <DownloadIcon count={activeDownloads} />}{n.label}</span>
-                    {isActive && <motion.span layoutId="top-underline" className="absolute inset-x-2 -bottom-[13px] h-0.5 rounded-full bg-accent-500" />}
-                  </>
-                )}
-              </NavLink>
-            ))}
+      <header className={`fixed inset-x-0 top-0 z-40 transition-colors duration-500 ${solid ? 'bg-canvas/95 shadow-lg shadow-black/40 backdrop-blur' : 'bg-gradient-to-b from-black/80 to-transparent'}`}>
+        <div className="flex items-center gap-4 px-4 py-2.5 md:gap-8 md:px-12 md:py-3">
+          <Link to="/" className="shrink-0 font-display text-3xl leading-none tracking-wider text-accent-500 md:text-4xl" title="Início">StreamHub</Link>
+          <nav className="hidden items-center gap-5 text-sm lg:flex">
+            {[...TABS, ...LINKS].map((t) => {
+              const active = t.match(loc.pathname)
+              const isTab = TABS.includes(t)
+              return (
+                <Link key={t.to} to={t.to} className={`relative py-1 transition ${active ? 'font-bold text-white' : 'text-zinc-300 hover:text-zinc-100'}`}>
+                  {t.label}
+                  {active && isTab && <motion.span layoutId="tab-underline" className="absolute inset-x-0 -bottom-1 h-0.5 rounded-full bg-accent-500" />}
+                </Link>
+              )
+            })}
           </nav>
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex items-center gap-1 sm:gap-2">
             <SearchBox />
-            <ModeSwitch />
-            <button onClick={logout} className="text-zinc-400 transition hover:text-white" title="Sair"><LogOut size={18} /></button>
+            <Link to="/downloads" title="Downloads" className={tool}><DownloadIcon count={activeDownloads} /></Link>
+            <Link to="/storage" title="Armazenamento" className={tool + ' max-sm:hidden'}><HardDrive size={19} /></Link>
+            <Link to="/settings" title="Configurações" className={tool}><Settings size={19} /></Link>
+            <button onClick={logout} title="Sair" className={tool + ' max-sm:hidden'}><LogOut size={19} /></button>
           </div>
         </div>
+        {/* celular e telas médias: abas em pílulas logo abaixo do logo */}
+        <nav className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-2.5 lg:hidden">
+          {[...TABS, ...LINKS].map((t) => {
+            const active = t.match(loc.pathname)
+            return (
+              <Link key={t.to} to={t.to}
+                className={`shrink-0 rounded-full border px-3.5 py-1 text-xs font-semibold transition ${active ? 'border-white bg-white text-black' : 'border-white/40 bg-black/30 text-zinc-100 backdrop-blur'}`}>
+                {t.label}
+              </Link>
+            )
+          })}
+        </nav>
       </header>
-      <main className="mx-auto max-w-7xl px-4 py-6">{page}</main>
+      <main className={fullBleed ? '' : 'mx-auto max-w-[1500px] px-4 pb-12 pt-32 md:px-8 lg:pt-24'}>
+        <motion.div key={loc.pathname} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35, ease: 'easeOut' }}>
+          <Outlet />
+        </motion.div>
+      </main>
+      <Footer />
     </div>
   )
 }

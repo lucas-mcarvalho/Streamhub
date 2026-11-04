@@ -3,7 +3,6 @@ import { useParams } from 'react-router-dom'
 import { motion, useScroll, useTransform } from 'framer-motion'
 import { Calendar, Clapperboard, Clock, Film, Layers, Mic2, Radio, Tv, User, Users } from 'lucide-react'
 import { api, fmtBytes, formatPt, genrePt, statusPt, type Episode, type Indexer, type Location, type Person, type Release, type TitleDetailsT } from '../api'
-import { useForceTheme } from '../theme'
 import { btn, btnGhost, input, Modal, Notice, Spinner, Bar, Chip, Score } from '../components/ui'
 import { useToast } from '../components/Toast'
 import { useAsync } from '../hooks'
@@ -255,7 +254,6 @@ function CastSection({ directors, cast }: { directors: Person[]; cast: Person[] 
 export default function TitlePage() {
   const { source, type, id } = useParams()
   const { data, loading, error } = useAsync(() => api<TitleDetailsT>(`/catalog/title/${source}/${type}/${id}`), [source, type, id])
-  useForceTheme(data ? (data.item.kind === 'ANIME' ? 'anime' : 'cinema') : undefined)
   const [season, setSeason] = useState<number | null>(null)
   const [full, setFull] = useState(false)
   const eps = useAsync(() => (season == null ? Promise.resolve([] as Episode[]) : api<Episode[]>(`/catalog/title/tmdb/tv/${id}/seasons/${season}`)), [season, id])
@@ -266,7 +264,7 @@ export default function TitlePage() {
   const { item, seasons } = data
   const anime = item.kind === 'ANIME'
   const genres = anime ? item.genres.map(genrePt) : item.genres
-  const exploreTo = (g: string) => (anime ? `/anime/explore?genre=${encodeURIComponent(item.genres[genres.indexOf(g)])}` : undefined)
+  const exploreTo = (g: string) => (anime ? `/animes/explore?genre=${encodeURIComponent(item.genres[genres.indexOf(g)])}` : undefined)
   const long = (item.overview ?? '').length > 380
   return (
     <div>

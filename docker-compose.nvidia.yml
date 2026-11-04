@@ -1,0 +1,13 @@
+# Conversão de vídeo pela GPU NVIDIA (NVENC). Requer o NVIDIA Container Toolkit instalado no computador.
+# Ative com COMPOSE_FILE=docker-compose.yml:docker-compose.nvidia.yml no .env (veja o README).
+services:
+  backend:
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video, compute, utility]

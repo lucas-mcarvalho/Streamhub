@@ -1,6 +1,10 @@
 package com.streamhub.library;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -11,6 +15,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -40,8 +45,44 @@ public class LibraryService {
 
     public record SubTrack(int index, String codec, String language, String title, boolean textBased) {}
 
+    /** Trecho que o player oferece pular: {@code intro}, {@code recap}, {@code credits} ou {@code preview}. */
+    public record SkipSegment(String kind, double start, double end) {}
+
     public record MediaInfo(double duration, String videoCodec, String pixFmt, boolean directPlay,
-                            List<AudioTrack> audio, List<SubTrack> subtitles) {}
+                            List<AudioTrack> audio, List<SubTrack> subtitles, List<SkipSegment> skips) {}
+
+    record Chapter(String title, double start, double end) {}
+
+    private static final String OPENING = "op ?\\d*|opening.*|abertura.*";
+    private static final Pattern CH_INTRO = Pattern.compile(OPENING + "|intro|introduction|introdu[cç][aã]o|title sequence|main titles?");
+    private static final Pattern CH_RECAP = Pattern.compile("recap.*|previously.*|resumo.*|anteriormente.*");
+    private static final Pattern CH_CREDITS = Pattern.compile("ed ?\\d*|ending.*|encerramento.*|credits|end credits|closing credits|cr[eé]ditos.*|outro");
+    private static final Pattern CH_PREVIEW = Pattern.compile("preview.*|next episode.*|next time.*|yokoku|pr[eé]via.*|pr[oó]ximo epis[oó]dio.*");
+
+    /**
+     * Encontra nos capítulos do arquivo a abertura, a recapitulação, o encerramento e a prévia do próximo episódio.
+     * Um capítulo "Intro" só vale como abertura quando não há outro chamado "Opening" (senão é a cena antes da abertura).
+     */
+    static List<SkipSegment> skipsFromChapters(List<Chapter> chapters) {
+        List<SkipSegment> out = new ArrayList<>();
+        boolean hasOpening = chapters.stream().anyMatch(c -> norm(c.title()).matches(OPENING));
+        for (Chapter c : chapters) {
+            String t = norm(c.title());
+            double len = c.end() - c.start();
+            if (t.isEmpty() || len < 5) continue;
+            String kind = null;
+            if (CH_INTRO.matcher(t).matches() && !(hasOpening && t.startsWith("intro"))) kind = len <= 300 ? "intro" : null;
+            else if (CH_RECAP.matcher(t).matches()) kind = len <= 300 ? "recap" : null;
+            else if (CH_CREDITS.matcher(t).matches()) kind = len <= 600 ? "credits" : null;
+            else if (CH_PREVIEW.matcher(t).matches()) kind = len <= 180 ? "preview" : null;
+            if (kind != null && out.stream().noneMatch(s -> s.start() == c.start())) out.add(new SkipSegment(kind, c.start(), c.end()));
+        }
+        return out;
+    }
+
+    private static String norm(String title) {
+        return title == null ? "" : title.toLowerCase(java.util.Locale.ROOT).replaceAll("[\\p{Punct}_]+", " ").replaceAll("\\s+", " ").trim();
+    }
 
     private static final Set<String> TEXT_SUBS = Set.of("subrip", "srt", "ass", "ssa", "mov_text", "webvtt", "text");
     private final java.util.Map<String, MediaInfo> infoCache = new java.util.concurrent.ConcurrentHashMap<>();
@@ -49,11 +90,14 @@ public class LibraryService {
     private final StorageLocationRepository locations;
     private final StorageService storage;
     private final String secret;
+    private final VideoAccel accel;
 
-    public LibraryService(StorageLocationRepository locations, StorageService storage, @Value("${streamhub.secret}") String secret) {
+    public LibraryService(StorageLocationRepository locations, StorageService storage, @Value("${streamhub.secret}") String secret,
+                          VideoAccel accel) {
         this.locations = locations;
         this.storage = storage;
         this.secret = secret;
+        this.accel = accel;
     }
 
     private static String encodeId(long locId, String rel) {
@@ -195,12 +239,14 @@ public class LibraryService {
         if (cached != null) return cached;
         try {
             String output = run(30, "ffprobe", "-v", "error", "-show_entries",
-                "stream=codec_type,codec_name,pix_fmt,channels:stream_tags=language,title:format=duration",
+                "stream=codec_type,codec_name,pix_fmt,channels:stream_tags=language,title:format=duration"
+                    + ":chapter=start_time,end_time:chapter_tags=title",
                 "-of", "compact=p=0", p.toString());
             double duration = 0;
             String vcodec = null, pix = null;
             List<AudioTrack> audio = new ArrayList<>();
             List<SubTrack> subs = new ArrayList<>();
+            List<Chapter> chapters = new ArrayList<>();
             for (String line : output.split("\n")) {
                 java.util.Map<String, String> kv = new java.util.HashMap<>();
                 for (String part : line.trim().split("\\|")) {
@@ -208,7 +254,11 @@ public class LibraryService {
                     if (a.length == 2) kv.put(a[0], a[1]);
                 }
                 String type = kv.get("codec_type");
-                if (type == null && kv.containsKey("duration")) {
+                if (type == null && kv.containsKey("start_time") && kv.containsKey("end_time")) {
+                    try {
+                        chapters.add(new Chapter(kv.get("tag:title"), Double.parseDouble(kv.get("start_time")), Double.parseDouble(kv.get("end_time"))));
+                    } catch (NumberFormatException ignored) { }
+                } else if (type == null && kv.containsKey("duration")) {
                     try { duration = Double.parseDouble(kv.get("duration")); } catch (NumberFormatException ignored) { }
                 } else if ("video".equals(type) && vcodec == null) {
                     vcodec = kv.get("codec_name");
@@ -227,7 +277,7 @@ public class LibraryService {
                 && vcodec != null && Set.of("h264", "vp8", "vp9", "av1").contains(vcodec)
                 && "yuv420p".equals(pix)
                 && (audio.isEmpty() || Set.of("aac", "mp3", "opus", "vorbis", "flac").contains(audio.get(0).codec()));
-            MediaInfo info = new MediaInfo(duration, vcodec, pix, directPlay, audio, subs);
+            MediaInfo info = new MediaInfo(duration, vcodec, pix, directPlay, audio, subs, skipsFromChapters(chapters));
             infoCache.put(key, info);
             return info;
         } catch (IOException e) {
@@ -238,23 +288,75 @@ public class LibraryService {
         }
     }
 
-    /** Inicia o ffmpeg gerando MP4 fragmentado (vídeo copiado quando possível, áudio em AAC estéreo). */
-    public Process startTranscode(String id, double start, int audioIndex) {
+    /** Conversão em andamento; {@code paced}: o vídeo está sendo recodificado e deve seguir em ritmo limitado. */
+    public record Transcode(Process process, boolean paced) {}
+
+    /** Segundos de vídeo entregues sem limite ao abrir ou pular, e depois o ritmo máximo em relação ao tempo real. */
+    private static final double BURST_SECONDS = 30, PACE = 1.5;
+
+    /**
+     * Inicia o ffmpeg gerando MP4 fragmentado (vídeo copiado quando possível, áudio em AAC estéreo).
+     * Ao converter o vídeo, usa a GPU quando houver.
+     */
+    public Transcode startTranscode(String id, double start, int audioIndex) {
         Path p = resolve(id);
         MediaInfo info = info(id);
         boolean copyVideo = "h264".equals(info.videoCodec()) && "yuv420p".equals(info.pixFmt());
+        VideoAccel.Plan plan = copyVideo ? null : accel.plan(p, info);
         List<String> cmd = new ArrayList<>(List.of("ffmpeg", "-v", "error", "-nostdin"));
+        if (plan != null) cmd.addAll(List.of("-progress", "pipe:2", "-nostats"));
+        if (plan != null) cmd.addAll(plan.input());
         if (start > 0) cmd.addAll(List.of("-ss", String.valueOf(start)));
         cmd.addAll(List.of("-i", p.toString(), "-map", "0:v:0"));
         if (!info.audio().isEmpty()) cmd.addAll(List.of("-map", "0:a:" + Math.max(0, Math.min(audioIndex, info.audio().size() - 1))));
-        if (copyVideo) cmd.addAll(List.of("-c:v", "copy"));
-        else cmd.addAll(List.of("-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"));
+        cmd.addAll(plan == null ? List.of("-c:v", "copy") : plan.video());
         cmd.addAll(List.of("-c:a", "aac", "-b:a", "192k", "-ac", "2", "-sn",
             "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"));
         try {
-            return new ProcessBuilder(cmd).redirectError(ProcessBuilder.Redirect.DISCARD).start();
+            ProcessBuilder pb = new ProcessBuilder(cmd);
+            if (plan == null) pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+            return new Transcode(pb.start(), plan != null);
         } catch (IOException e) {
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "NO_FFMPEG", "ffmpeg não está disponível no servidor");
+        }
+    }
+
+    /**
+     * Repassa o MP4 ao navegador. Ao recodificar, depois dos primeiros segundos segue só um pouco à frente do tempo real:
+     * enquanto a saída não é lida, o ffmpeg fica parado esperando, sem gastar processador.
+     */
+    public void pipe(Transcode t, OutputStream out) throws IOException {
+        Process pr = t.process();
+        AtomicLong encodedMicros = new AtomicLong();
+        if (t.paced()) Thread.ofVirtual().start(() -> readProgress(pr.getErrorStream(), encodedMicros));
+        long started = System.nanoTime();
+        byte[] buf = new byte[64 * 1024];
+        try (InputStream in = pr.getInputStream()) {
+            for (int n; (n = in.read(buf)) >= 0; ) {
+                out.write(buf, 0, n);
+                if (!t.paced()) continue;
+                double ahead;
+                while ((ahead = encodedMicros.get() / 1e6 - (BURST_SECONDS + PACE * (System.nanoTime() - started) / 1e9)) > 0) {
+                    out.flush();
+                    Thread.sleep(Math.min(1000, (long) (ahead * 1000 / PACE) + 1));
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            pr.destroyForcibly();
+        }
+    }
+
+    /** Lê o "-progress" do ffmpeg (linhas "out_time_us=..."), que diz até onde o vídeo já foi convertido. */
+    private static void readProgress(InputStream err, AtomicLong encodedMicros) {
+        try (var r = new BufferedReader(new InputStreamReader(err, StandardCharsets.UTF_8))) {
+            for (String line; (line = r.readLine()) != null; ) {
+                if (!line.startsWith("out_time_us=")) continue;
+                try { encodedMicros.set(Long.parseLong(line.substring(12).trim())); } catch (NumberFormatException ignored) { }
+            }
+        } catch (IOException ignored) {
+            // o processo terminou
         }
     }
 

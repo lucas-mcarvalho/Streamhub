@@ -19,6 +19,20 @@ public class AppSettingsService {
         }).orElse(defaultValue);
     }
 
+    public String getString(String key, String defaultValue) {
+        return repo.findById(key).map(AppSetting::getValue).orElse(defaultValue);
+    }
+
+    public void setString(String key, String value) {
+        AppSetting s = repo.findById(key).orElseGet(() -> {
+            AppSetting n = new AppSetting();
+            n.setKey(key);
+            return n;
+        });
+        s.setValue(value);
+        repo.save(s);
+    }
+
     public void setInt(String key, int value) {
         AppSetting s = repo.findById(key).orElseGet(() -> {
             AppSetting n = new AppSetting();

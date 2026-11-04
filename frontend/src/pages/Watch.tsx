@@ -14,7 +14,7 @@ const audioLabel = (a: AudioTrack) => `${langName(a.language)}${a.title ? ' — 
 const subLabel = (s: SubTrack) =>
   `${langName(s.language)}${s.language === 'por' && /brazil/i.test(s.title ?? '') ? ' (PT-BR)' : ''}${s.title ? ' — ' + s.title : ''}${s.textBased ? '' : ' [imagem, indisponível]'}`
 
-const ctl = 'grid h-10 w-10 shrink-0 place-items-center rounded-full text-white transition hover:bg-white/15 active:bg-white/25'
+const ctl = 'grid h-9 w-9 shrink-0 sm:h-10 sm:w-10 place-items-center rounded-full text-white transition hover:bg-white/15 active:bg-white/25'
 
 function MenuGroup({ items, onPick }: { items: { key: number; label: string; on: boolean; disabled?: boolean }[]; onPick: (k: number) => void }) {
   return (
@@ -74,7 +74,7 @@ export default function Watch() {
   const stallSince = useRef<number | null>(null)
   const healthySince = useRef<number | null>(null)
   const retries = useRef(0)
-  const [tab, setTab] = useState<'audio' | 'sub' | 'rate'>('sub')
+  const [tab, setTab] = useState<'audio' | 'sub' | 'rate' | 'skip'>('sub')
   const [fs, setFs] = useState(false)
   const [fake, setFake] = useState(false)
   const [flash, setFlash] = useState<{ side: number; n: number }>()
@@ -82,7 +82,12 @@ export default function Watch() {
   const tapTimer = useRef<number>()
   const lastTap = useRef(0)
   const touch = coarse()
-  menuOpen.current = menu
+  const [volOpen, setVolOpen] = useState(false)
+  // iPhone/iPad ignoram o volume definido pela página (só o mudo funciona); lá o controle deslizante não aparece
+  const volumeWorks = useMemo(() => {
+    try { const v = document.createElement('video'); v.volume = 0.5; return v.volume === 0.5 } catch { return false }
+  }, [])
+  menuOpen.current = menu || volOpen
 
   const abs = mode === 'transcode' ? offset + cur : cur
   const duration = info?.duration || video.current?.duration || 0
@@ -104,6 +109,25 @@ export default function Watch() {
     const i = files.findIndex((f) => f.id === id)
     return i >= 0 && files[i + 1]?.group === files[i].group ? files[i + 1] : undefined
   }, [files, id])
+
+  // pular abertura/recapitulação/encerramento, a partir dos capítulos do arquivo
+  const [autoSkip, setAutoSkip] = useState(() => { try { return localStorage.getItem('streamhub.autoSkip') === '1' } catch { return false } })
+  const changeAutoSkip = (on: boolean) => {
+    setAutoSkip(on)
+    try { localStorage.setItem('streamhub.autoSkip', on ? '1' : '0') } catch { /* armazenamento indisponível */ }
+  }
+  const autoSkipped = useRef(new Set<number>())
+  useEffect(() => { autoSkipped.current = new Set() }, [id])
+  const skip = useMemo(() => {
+    const s = info?.skips?.find((x) => abs >= x.start && abs < x.end - 1)
+    if (!s) return undefined
+    const endsEpisode = s.kind === 'preview' || duration - s.end < 150
+    if ((s.kind === 'credits' || s.kind === 'preview') && endsEpisode) {
+      return next ? { seg: s, label: 'Próximo episódio', go: () => nav('/watch/' + next.id) } : undefined
+    }
+    const label = s.kind === 'intro' ? 'Pular abertura' : s.kind === 'recap' ? 'Pular recapitulação' : 'Pular encerramento'
+    return { seg: s, label, go: () => seek(s.end) }
+  }, [info, abs, duration, next]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // carrega informações, token e lista da biblioteca
   useEffect(() => {
@@ -203,6 +227,14 @@ export default function Watch() {
     else { setOffset(target); setCur(0); setWaiting(true) }
   }, [mode, info])
 
+  // pulo automático: só abertura e recapitulação, uma vez por trecho (voltar até ele de propósito não pula de novo)
+  useEffect(() => {
+    if (!autoSkip || !skip || waiting || (skip.seg.kind !== 'intro' && skip.seg.kind !== 'recap')) return
+    if (autoSkipped.current.has(skip.seg.start)) return
+    autoSkipped.current.add(skip.seg.start)
+    skip.go()
+  }, [autoSkip, skip, waiting])
+
   const toggle = useCallback(() => {
     const v = video.current
     if (v) v.paused ? v.play() : v.pause()
@@ -254,11 +286,12 @@ export default function Watch() {
       else if (e.key === 'ArrowLeft') seek(abs - 10)
       else if (e.key === 'f') fullscreen()
       else if (e.key === 'm') setMuted((m) => !m)
+      else if (e.key === 's' && skip) skip.go()
       else if (e.key === 'Escape' && fake) setFake(false)
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
-  }, [toggle, seek, fullscreen, abs, fake])
+  }, [toggle, seek, fullscreen, abs, fake, skip])
 
   useEffect(() => { if (video.current) { video.current.volume = volume; video.current.muted = muted } }, [volume, muted, src])
   useEffect(() => { if (video.current) video.current.playbackRate = rate }, [rate, src])
@@ -272,6 +305,7 @@ export default function Watch() {
   // toque: 1 toque mostra/esconde os controles, 2 toques nas laterais pulam 10 s, 2 toques no centro pausam
   const onTap = (e: React.MouseEvent<HTMLElement>) => {
     if (menu) { setMenu(false); return }
+    if (volOpen) { setVolOpen(false); return }
     if (!touch) { toggle(); return }
     const r = e.currentTarget.getBoundingClientRect()
     const x = (e.clientX - r.left) / r.width
@@ -297,6 +331,7 @@ export default function Watch() {
     ...(info && info.audio.length > 1 ? [{ id: 'audio' as const, label: 'Áudio' }] : []),
     ...(info && info.subtitles.length > 0 ? [{ id: 'sub' as const, label: 'Legenda' }] : []),
     { id: 'rate' as const, label: 'Velocidade' },
+    ...(info?.skips?.some((s) => s.kind === 'intro' || s.kind === 'recap') ? [{ id: 'skip' as const, label: 'Abertura' }] : []),
   ]
   const activeTab = tabs.some((t) => t.id === tab) ? tab : tabs[0].id
 
@@ -342,6 +377,12 @@ export default function Watch() {
             <span className="whitespace-pre-line rounded bg-black/55 px-2 py-1 text-[15px] font-medium leading-snug text-white [text-shadow:0_1px_3px_#000] sm:text-lg md:text-2xl">{subtitleText}</span>
           </div>
         )}
+        {skip && !menu && !volOpen && (
+          <button onClick={skip.go} title={`${skip.label} (s)`}
+            className={`absolute right-3 z-10 flex items-center gap-1.5 rounded-md border border-white/40 bg-black/70 px-3 py-1.5 text-xs font-semibold text-white shadow-xl backdrop-blur transition-all hover:bg-white hover:text-black active:scale-95 sm:right-6 sm:gap-2 sm:px-5 sm:py-2.5 sm:text-base ${uiVisible ? 'bottom-[5.5rem] sm:bottom-24' : 'bottom-4 sm:bottom-8'}`}>
+            {skip.label}<SkipForward size={16} />
+          </button>
+        )}
         {file && (
           <div className={`pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/80 to-transparent px-4 pb-10 pt-3 transition-opacity sm:block sm:px-6 ${expanded ? '' : 'hidden'} ${uiVisible ? 'opacity-100' : 'opacity-0'}`} style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}>
             <div className="truncate text-xs font-medium text-zinc-300 sm:text-sm">{file.group}</div>
@@ -375,6 +416,10 @@ export default function Watch() {
                 </div>}
               </>}
               {activeTab === 'rate' && <MenuGroup items={[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => ({ key: r, label: r === 1 ? 'Normal' : r + 'x', on: r === rate }))} onPick={(k) => { setRate(Number(k)); setMenu(false) }} />}
+              {activeTab === 'skip' && <>
+                <MenuGroup items={[{ key: 0, label: 'Mostrar botão "Pular abertura"', on: !autoSkip }, { key: 1, label: 'Pular automaticamente', on: autoSkip }]} onPick={(k) => changeAutoSkip(k === 1)} />
+                <p className="mt-2 border-t border-white/10 px-3 py-3 text-xs text-zinc-400">Vale para abertura e recapitulação, em todos os episódios. O encerramento sempre mostra o botão.</p>
+              </>}
             </div>
           </div>
         )}
@@ -382,20 +427,36 @@ export default function Watch() {
           style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}>
           <input type="range" min={0} max={Math.max(1, Math.floor(duration))} value={Math.floor(abs)} onChange={(e) => seek(Number(e.target.value))}
             className="seek mb-1 h-5 w-full cursor-pointer accent-accent-500" aria-label="Posição" />
-          <div className="flex items-center gap-0.5 text-sm sm:gap-1">
+          <div className="flex min-w-0 items-center gap-0.5 text-sm sm:gap-1">
             <button onClick={toggle} className={ctl} aria-label="Reproduzir/Pausar">{playing ? <Pause size={22} fill="white" /> : <Play size={22} fill="white" />}</button>
             <button onClick={() => seek(abs - 10)} className={ctl} title="Voltar 10s (←)" aria-label="Voltar 10 segundos"><RotateCcw size={20} /></button>
             <button onClick={() => seek(abs + 10)} className={ctl} title="Avançar 10s (→)" aria-label="Avançar 10 segundos"><RotateCw size={20} /></button>
-            <span className="ml-1 whitespace-nowrap text-xs tabular-nums text-zinc-300 sm:text-sm">{fmt(abs)} / {fmt(duration)}</span>
+            <span className="ml-1 min-w-0 truncate whitespace-nowrap text-xs tabular-nums text-zinc-300 sm:text-sm">{fmt(abs)} / {fmt(duration)}</span>
             {!touch && (
-              <span className="ml-2 flex items-center gap-1">
+              <span className="ml-2 hidden items-center gap-1 sm:flex">
                 <button onClick={() => setMuted(!muted)} className={ctl} title="Mudo (m)" aria-label="Mudo">{muted || volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}</button>
                 <input type="range" min={0} max={1} step={0.05} value={muted ? 0 : volume} onChange={(e) => { setVolume(Number(e.target.value)); setMuted(false) }} className="w-20 accent-accent-500" aria-label="Volume" />
               </span>
             )}
-            <span className="ml-auto flex items-center gap-0.5 sm:gap-1">
-              {next && <button onClick={() => nav('/watch/' + next.id)} className="flex h-10 items-center gap-1 rounded-full px-3 text-xs font-semibold hover:bg-white/15 active:bg-white/25">Próximo<SkipForward size={16} /></button>}
-              <button onClick={() => setMenu((m) => !m)} className={ctl} title="Áudio, legenda e velocidade" aria-label="Configurações"><Settings size={20} /></button>
+            <span className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
+              {touch && (
+                <span className="relative">
+                  <button onClick={() => { setVolOpen((o) => !o); setMenu(false) }} className={ctl} aria-label="Volume" aria-expanded={volOpen}>
+                    {muted || volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}
+                  </button>
+                  {volOpen && (
+                    <div className="absolute bottom-12 right-0 z-20 flex w-56 items-center gap-2 rounded-xl border border-white/10 bg-zinc-900/95 p-2 shadow-2xl backdrop-blur">
+                      <button onClick={() => setMuted(!muted)} className={ctl} aria-label={muted ? 'Ativar som' : 'Mudo'}>{muted || volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}</button>
+                      {volumeWorks
+                        ? <input type="range" min={0} max={1} step={0.05} value={muted ? 0 : volume} onChange={(e) => { setVolume(Number(e.target.value)); setMuted(false) }}
+                            className="h-8 min-w-0 flex-1 accent-accent-500" aria-label="Volume" />
+                        : <span className="text-xs text-zinc-400">Use os botões de volume do aparelho.</span>}
+                    </div>
+                  )}
+                </span>
+              )}
+              {next && <button onClick={() => nav('/watch/' + next.id)} title="Próximo episódio" aria-label="Próximo episódio" className="flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3"><span className="hidden sm:inline">Próximo</span><SkipForward size={16} /></button>}
+              <button onClick={() => { setMenu((m) => !m); setVolOpen(false) }} className={ctl} title="Áudio, legenda e velocidade" aria-label="Configurações"><Settings size={20} /></button>
               <button onClick={fullscreen} className={ctl} title="Tela cheia (f)" aria-label="Tela cheia">{expanded ? <Minimize size={20} /> : <Maximize size={20} />}</button>
             </span>
           </div>
@@ -404,7 +465,7 @@ export default function Watch() {
       {err && <div className="mt-3"><Notice text={err} /></div>}
       <p className="mt-3 text-xs text-zinc-500">
         {mode === 'transcode' ? 'Convertendo no servidor para o navegador (vídeo/áudio incompatível ou faixa de áudio trocada). ' : 'Reprodução direta. '}
-        {touch ? 'Toque duas vezes nas laterais para pular 10 s e no centro para pausar.' : 'Atalhos: espaço = pausar · ←/→ = ±10s · f = tela cheia · m = mudo.'}
+        {touch ? 'Toque duas vezes nas laterais para pular 10 s e no centro para pausar.' : 'Atalhos: espaço = pausar · ←/→ = ±10s · f = tela cheia · m = mudo · s = pular abertura.'}
       </p>
     </div>
   )
