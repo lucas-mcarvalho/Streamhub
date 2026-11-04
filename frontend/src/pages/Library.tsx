@@ -30,12 +30,13 @@ function useMetas(groups: Group[]) {
   return metas
 }
 
-function LibraryCard({ g, meta, index, onOpen }: { g: Group; meta: Meta; index: number; onOpen: () => void }) {
+function LibraryCard({ g, meta, index, onOpen, onDelete }: { g: Group; meta: Meta; index: number; onOpen: () => void; onDelete: () => void }) {
   const anime = meta?.kind === 'ANIME' || g.kind === 'ANIME'
   const watched = g.files.filter((f) => progressOf(f.id).done).length
   const genres = (meta?.genres ?? []).map((x) => (anime ? genrePt(x) : x)).slice(0, 2)
   return (
-    <motion.button onClick={onOpen} className="group w-full text-left" initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }}
+    <motion.div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() } }}
+      className="group w-full cursor-pointer text-left" initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }}
       transition={{ delay: Math.min(index, 12) * 0.04 }} whileHover={{ y: -8 }} whileTap={{ scale: 0.97 }}>
       <div className={`relative aspect-[2/3] overflow-hidden bg-surface2 shadow-lg ring-1 ring-white/5 transition duration-300 group-hover:shadow-2xl group-hover:shadow-accent-500/30 group-hover:ring-accent-500/60 ${anime ? 'rounded-2xl' : 'rounded-lg'}`}>
         {meta?.posterUrl ? <img src={meta.posterUrl} alt={g.name} className="h-full w-full object-cover transition duration-500 group-hover:scale-110" />
@@ -46,10 +47,12 @@ function LibraryCard({ g, meta, index, onOpen }: { g: Group; meta: Meta; index: 
           <span className="grid h-14 w-14 place-items-center rounded-full bg-accent-600 shadow-xl"><Play size={24} fill="white" /></span>
         </div>
         {watched > 0 && <span className="absolute bottom-2 left-2 flex items-center gap-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[11px] font-bold text-black"><CheckCircle2 size={12} />{watched}/{g.files.length}</span>}
+        <button title="Apagar do disco" onClick={(e) => { e.stopPropagation(); onDelete() }}
+          className="absolute bottom-2 right-2 grid h-8 w-8 place-items-center rounded-full bg-black/70 text-zinc-300 opacity-0 backdrop-blur transition hover:bg-red-600 hover:text-white group-hover:opacity-100 max-md:opacity-100"><Trash2 size={15} /></button>
       </div>
       <div className="mt-2.5 truncate text-sm font-semibold transition group-hover:text-accent-400">{meta?.title ?? g.name}</div>
       <div className="truncate text-xs text-zinc-400">{[meta?.year, ...genres, fmtBytes(g.size)].filter(Boolean).join(' · ')}</div>
-    </motion.button>
+    </motion.div>
   )
 }
 
@@ -138,6 +141,7 @@ export default function Library() {
   const raw = params.get('tab')
   const scope: Scope = raw === 'cinema' || raw === 'anime' ? raw : 'all'
   const { data, loading, reload } = useAsync(() => api<LibraryFile[]>('/library'), [])
+  const toast = useToast()
   const [q, setQ] = useState('')
   const [sort, setSort] = useState('recent')
   const [openKey, setOpenKey] = useState<string | null>(null)
@@ -165,6 +169,12 @@ export default function Library() {
   const total = visible.reduce((s, g) => s + g.size, 0)
   const open = groups.find((g) => g.key === openKey)
   const scopeFiles = visible.flatMap((g) => g.files)
+  const removeGroup = async (g: Group) => {
+    const title = metas[g.key]?.title ?? g.name
+    if (!confirm(`Apagar "${title}" (${g.files.length} arquivo(s), ${fmtBytes(g.size)}) do disco? Esta ação não pode ser desfeita.`)) return
+    try { await api('/library/delete', { method: 'POST', json: { ids: g.files.map((f) => f.id) } }); toast('Arquivo(s) apagado(s)'); reload() }
+    catch (e) { toast((e as Error).message, 'err') }
+  }
 
   return (
     <div>
@@ -204,7 +214,7 @@ export default function Library() {
         </motion.div>
       ) : (
         <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          {visible.map((g, i) => <LibraryCard key={g.key} g={g} meta={metas[g.key]} index={i} onOpen={() => setOpenKey(g.key)} />)}
+          {visible.map((g, i) => <LibraryCard key={g.key} g={g} meta={metas[g.key]} index={i} onOpen={() => setOpenKey(g.key)} onDelete={() => removeGroup(g)} />)}
           {groups.length > 0 && Object.keys(metas).length < groups.length && <PosterSkeleton fluid />}
         </div>
       )}
