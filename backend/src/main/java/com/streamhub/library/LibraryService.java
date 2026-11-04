@@ -45,8 +45,44 @@ public class LibraryService {
 
     public record SubTrack(int index, String codec, String language, String title, boolean textBased) {}
 
+    /** Trecho que o player oferece pular: {@code intro}, {@code recap}, {@code credits} ou {@code preview}. */
+    public record SkipSegment(String kind, double start, double end) {}
+
     public record MediaInfo(double duration, String videoCodec, String pixFmt, boolean directPlay,
-                            List<AudioTrack> audio, List<SubTrack> subtitles) {}
+                            List<AudioTrack> audio, List<SubTrack> subtitles, List<SkipSegment> skips) {}
+
+    record Chapter(String title, double start, double end) {}
+
+    private static final String OPENING = "op ?\\d*|opening.*|abertura.*";
+    private static final Pattern CH_INTRO = Pattern.compile(OPENING + "|intro|introduction|introdu[cç][aã]o|title sequence|main titles?");
+    private static final Pattern CH_RECAP = Pattern.compile("recap.*|previously.*|resumo.*|anteriormente.*");
+    private static final Pattern CH_CREDITS = Pattern.compile("ed ?\\d*|ending.*|encerramento.*|credits|end credits|closing credits|cr[eé]ditos.*|outro");
+    private static final Pattern CH_PREVIEW = Pattern.compile("preview.*|next episode.*|next time.*|yokoku|pr[eé]via.*|pr[oó]ximo epis[oó]dio.*");
+
+    /**
+     * Encontra nos capítulos do arquivo a abertura, a recapitulação, o encerramento e a prévia do próximo episódio.
+     * Um capítulo "Intro" só vale como abertura quando não há outro chamado "Opening" (senão é a cena antes da abertura).
+     */
+    static List<SkipSegment> skipsFromChapters(List<Chapter> chapters) {
+        List<SkipSegment> out = new ArrayList<>();
+        boolean hasOpening = chapters.stream().anyMatch(c -> norm(c.title()).matches(OPENING));
+        for (Chapter c : chapters) {
+            String t = norm(c.title());
+            double len = c.end() - c.start();
+            if (t.isEmpty() || len < 5) continue;
+            String kind = null;
+            if (CH_INTRO.matcher(t).matches() && !(hasOpening && t.startsWith("intro"))) kind = len <= 300 ? "intro" : null;
+            else if (CH_RECAP.matcher(t).matches()) kind = len <= 300 ? "recap" : null;
+            else if (CH_CREDITS.matcher(t).matches()) kind = len <= 600 ? "credits" : null;
+            else if (CH_PREVIEW.matcher(t).matches()) kind = len <= 180 ? "preview" : null;
+            if (kind != null && out.stream().noneMatch(s -> s.start() == c.start())) out.add(new SkipSegment(kind, c.start(), c.end()));
+        }
+        return out;
+    }
+
+    private static String norm(String title) {
+        return title == null ? "" : title.toLowerCase(java.util.Locale.ROOT).replaceAll("[\\p{Punct}_]+", " ").replaceAll("\\s+", " ").trim();
+    }
 
     private static final Set<String> TEXT_SUBS = Set.of("subrip", "srt", "ass", "ssa", "mov_text", "webvtt", "text");
     private final java.util.Map<String, MediaInfo> infoCache = new java.util.concurrent.ConcurrentHashMap<>();
@@ -203,12 +239,14 @@ public class LibraryService {
         if (cached != null) return cached;
         try {
             String output = run(30, "ffprobe", "-v", "error", "-show_entries",
-                "stream=codec_type,codec_name,pix_fmt,channels:stream_tags=language,title:format=duration",
+                "stream=codec_type,codec_name,pix_fmt,channels:stream_tags=language,title:format=duration"
+                    + ":chapter=start_time,end_time:chapter_tags=title",
                 "-of", "compact=p=0", p.toString());
             double duration = 0;
             String vcodec = null, pix = null;
             List<AudioTrack> audio = new ArrayList<>();
             List<SubTrack> subs = new ArrayList<>();
+            List<Chapter> chapters = new ArrayList<>();
             for (String line : output.split("\n")) {
                 java.util.Map<String, String> kv = new java.util.HashMap<>();
                 for (String part : line.trim().split("\\|")) {
@@ -216,7 +254,11 @@ public class LibraryService {
                     if (a.length == 2) kv.put(a[0], a[1]);
                 }
                 String type = kv.get("codec_type");
-                if (type == null && kv.containsKey("duration")) {
+                if (type == null && kv.containsKey("start_time") && kv.containsKey("end_time")) {
+                    try {
+                        chapters.add(new Chapter(kv.get("tag:title"), Double.parseDouble(kv.get("start_time")), Double.parseDouble(kv.get("end_time"))));
+                    } catch (NumberFormatException ignored) { }
+                } else if (type == null && kv.containsKey("duration")) {
                     try { duration = Double.parseDouble(kv.get("duration")); } catch (NumberFormatException ignored) { }
                 } else if ("video".equals(type) && vcodec == null) {
                     vcodec = kv.get("codec_name");
@@ -235,7 +277,7 @@ public class LibraryService {
                 && vcodec != null && Set.of("h264", "vp8", "vp9", "av1").contains(vcodec)
                 && "yuv420p".equals(pix)
                 && (audio.isEmpty() || Set.of("aac", "mp3", "opus", "vorbis", "flac").contains(audio.get(0).codec()));
-            MediaInfo info = new MediaInfo(duration, vcodec, pix, directPlay, audio, subs);
+            MediaInfo info = new MediaInfo(duration, vcodec, pix, directPlay, audio, subs, skipsFromChapters(chapters));
             infoCache.put(key, info);
             return info;
         } catch (IOException e) {

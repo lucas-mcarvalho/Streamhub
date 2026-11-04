@@ -88,7 +88,9 @@ export type Person = { name: string; role?: string; photoUrl?: string }
 export type TitleDetailsT = { item: CatalogItem; seasons: Season[]; directors: Person[]; cast: Person[] }
 export type AudioTrack = { index: number; codec?: string; language?: string; title?: string; channels: number }
 export type SubTrack = { index: number; codec?: string; language?: string; title?: string; textBased: boolean }
-export type MediaInfo = { duration: number; videoCodec?: string; directPlay: boolean; audio: AudioTrack[]; subtitles: SubTrack[] }
+/** Trecho marcado nos capítulos do arquivo que o player oferece pular. */
+export type SkipSegment = { kind: 'intro' | 'recap' | 'credits' | 'preview'; start: number; end: number }
+export type MediaInfo = { duration: number; videoCodec?: string; directPlay: boolean; audio: AudioTrack[]; subtitles: SubTrack[]; skips?: SkipSegment[] }
 
 const STATUS: Record<string, string> = {
   FINISHED: 'Finalizado', RELEASING: 'Em exibição', NOT_YET_RELEASED: 'Em breve', CANCELLED: 'Cancelado', HIATUS: 'Em hiato',
