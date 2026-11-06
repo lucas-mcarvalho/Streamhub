@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Check, Loader2, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SkipForward, Volume2, VolumeX } from 'lucide-react'
+import { ArrowLeft, Check, Loader2, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-react'
 import { api, type AudioTrack, type GuideEpisode, type LibraryFile, type MediaInfo, type SubTrack } from '../api'
 import { Notice } from '../components/ui'
 import { parseVtt, subtitleAt, transcodeStart, type Cue } from '../lib/subtitles'
@@ -108,6 +108,10 @@ export default function Watch() {
   const next = useMemo(() => {
     const i = files.findIndex((f) => f.id === id)
     return i >= 0 && files[i + 1]?.group === files[i].group ? files[i + 1] : undefined
+  }, [files, id])
+  const prev = useMemo(() => {
+    const i = files.findIndex((f) => f.id === id)
+    return i > 0 && files[i - 1].group === files[i].group ? files[i - 1] : undefined
   }, [files, id])
 
   // pular abertura/recapitulação/encerramento, a partir dos capítulos do arquivo
@@ -455,6 +459,7 @@ export default function Watch() {
                   )}
                 </span>
               )}
+              {prev && <button onClick={() => nav('/watch/' + prev.id)} title="Episódio anterior" aria-label="Episódio anterior" className="flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3"><SkipBack size={16} /><span className="hidden sm:inline">Anterior</span></button>}
               {next && <button onClick={() => nav('/watch/' + next.id)} title="Próximo episódio" aria-label="Próximo episódio" className="flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3"><span className="hidden sm:inline">Próximo</span><SkipForward size={16} /></button>}
               <button onClick={() => { setMenu((m) => !m); setVolOpen(false) }} className={ctl} title="Áudio, legenda e velocidade" aria-label="Configurações"><Settings size={20} /></button>
               <button onClick={fullscreen} className={ctl} title="Tela cheia (f)" aria-label="Tela cheia">{expanded ? <Minimize size={20} /> : <Maximize size={20} />}</button>
