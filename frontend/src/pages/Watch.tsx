@@ -264,12 +264,16 @@ export default function Watch() {
   const recoverRef = useRef(recover)
   recoverRef.current = recover
 
+  const lastTime = useRef<{ v?: HTMLVideoElement; t: number }>({ t: -1 })
   useEffect(() => {
     const iv = window.setInterval(() => {
       const v = video.current
-      if (!v || v.paused || v.ended) { stallSince.current = null; healthySince.current = null; return }
+      if (!v || v.paused || v.ended || v.seeking) { stallSince.current = null; healthySince.current = null; lastTime.current = { t: -1 }; return }
       const now = Date.now()
-      if (v.readyState < 3) {
+      // imagem congelada: o navegador diz que tem dados, mas o relógio do vídeo não anda
+      const frozen = lastTime.current.v === v && lastTime.current.t === v.currentTime
+      lastTime.current = { v, t: v.currentTime }
+      if (v.readyState < 3 || frozen) {
         healthySince.current = null
         stallSince.current ??= now
         if (now - stallSince.current > 8000) { stallSince.current = null; recoverRef.current() }

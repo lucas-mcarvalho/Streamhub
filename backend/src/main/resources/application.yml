@@ -17,6 +17,11 @@ spring:
 
 server:
   port: ${SERVER_PORT:8080}
+  tomcat:
+    # Na conversão o navegador para de ler quando o buffer dele enche (ou com o vídeo pausado). Com o padrão de 20 s,
+    # a escrita bloqueada estourava o tempo, o Tomcat derrubava a conexão e o player travava ao fim do buffer.
+    connection-timeout: 15m
+    keep-alive-timeout: 20s
 
 management:
   endpoints:

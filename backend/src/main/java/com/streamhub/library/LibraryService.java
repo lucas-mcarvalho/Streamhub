@@ -295,7 +295,8 @@ public class LibraryService {
     public record Transcode(Process process, boolean paced) {}
 
     /** Segundos de vídeo entregues sem limite ao abrir ou pular, e depois o ritmo máximo em relação ao tempo real. */
-    private static final double BURST_SECONDS = 30, PACE = 1.5;
+    // PACE acima de 2: assistindo em 2x, um ritmo menor esvaziava o buffer e o vídeo travava
+    private static final double BURST_SECONDS = 30, PACE = 2.5;
 
     /**
      * Inicia o ffmpeg gerando MP4 fragmentado (vídeo copiado quando possível, áudio em AAC estéreo).
