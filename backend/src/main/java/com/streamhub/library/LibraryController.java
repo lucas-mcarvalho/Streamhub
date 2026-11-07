@@ -62,6 +62,16 @@ public class LibraryController {
             .body(service.thumbnail(id, t, w));
     }
 
+    /** Grade de miniaturas para a prévia da barra de tempo; o layout vai no cabeçalho X-Storyboard. */
+    @GetMapping("/{id}/storyboard")
+    public ResponseEntity<Resource> storyboard(@PathVariable String id) {
+        LibraryService.Storyboard sb = service.storyboard(id);
+        return ResponseEntity.ok().contentType(MediaType.IMAGE_JPEG).header("Cache-Control", "private, max-age=86400")
+            .header("X-Storyboard", "interval=" + sb.interval() + ";cols=" + sb.cols() + ";count=" + sb.count()
+                + ";w=" + sb.tileW() + ";h=" + sb.tileH())
+            .body(new FileSystemResource(sb.image()));
+    }
+
     @GetMapping("/{id}/info")
     public LibraryService.MediaInfo info(@PathVariable String id) { return service.info(id); }
 

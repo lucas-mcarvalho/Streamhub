@@ -523,6 +523,78 @@ public class LibraryService {
         return out;
     }
 
+    // ---------- grade de miniaturas para a prévia ao passar o mouse na barra de tempo ----------
+
+    /** Imagem com um quadro a cada {@code interval} segundos, em {@code cols} colunas de {@code tileW}×{@code tileH}. */
+    public record Storyboard(Path image, double interval, int cols, int count, int tileW, int tileH) {}
+
+    private static final int SB_COLS = 10, SB_TILE_W = 200, SB_MAX_TILES = 300;
+    private final java.util.concurrent.ConcurrentHashMap<Path, Object> storyboardLocks = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.Semaphore storyboardSlots = new java.util.concurrent.Semaphore(2);
+
+    /** Um quadro a cada 5 s, espaçando mais em vídeos longos para a imagem não passar de {@value #SB_MAX_TILES} quadros. */
+    static double storyboardInterval(double duration) { return Math.max(5, Math.ceil(duration / SB_MAX_TILES)); }
+
+    /**
+     * Gera (uma vez por arquivo, em cache no diretório temporário) a grade de miniaturas do vídeo.
+     * Decodifica só os quadros-chave, o que é rápido mesmo em HEVC 10 bits; a precisão fica no espaçamento entre eles.
+     */
+    public Storyboard storyboard(String id) {
+        Path p = resolve(id);
+        double duration = info(id).duration();
+        if (!(duration > 0)) throw new ApiException(HttpStatus.NOT_FOUND, "NO_STORYBOARD", "Duração do vídeo desconhecida");
+        double interval = storyboardInterval(duration);
+        int count = (int) Math.ceil(duration / interval);
+        int rows = (count + 1 + SB_COLS - 1) / SB_COLS; // +1: o filtro fps às vezes solta um quadro a mais no fim
+        try {
+            byte[] h = MessageDigest.getInstance("SHA-256").digest((p + "|" + p.toFile().lastModified() + "|" + Files.size(p)
+                + "|" + interval + "|" + SB_COLS + "x" + rows + "|" + SB_TILE_W).getBytes(StandardCharsets.UTF_8));
+            Path dir = Path.of(System.getProperty("java.io.tmpdir"), "streamhub-storyboards");
+            Files.createDirectories(dir);
+            Path target = dir.resolve(java.util.HexFormat.of().formatHex(h, 0, 16) + ".jpg");
+            if (!Files.exists(target)) {
+                synchronized (storyboardLocks.computeIfAbsent(target, k -> new Object())) {
+                    if (!Files.exists(target)) {
+                        storyboardSlots.acquire();
+                        try {
+                            Path part = dir.resolve(target.getFileName() + ".part.jpg");
+                            run(600, "ffmpeg", "-v", "error", "-nostdin", "-y", "-skip_frame", "nokey", "-i", p.toString(),
+                                "-an", "-sn", "-dn", "-vf", "fps=1/" + (long) interval + ",scale=" + SB_TILE_W + ":-2,tile=" + SB_COLS + "x" + rows,
+                                "-frames:v", "1", "-q:v", "5", part.toString());
+                            if (!Files.exists(part) || Files.size(part) == 0) throw new IOException("grade vazia");
+                            Files.move(part, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                        } finally {
+                            storyboardSlots.release();
+                            storyboardLocks.remove(target);
+                        }
+                    }
+                }
+            }
+            int[] size = imageSize(target);
+            return new Storyboard(target, interval, SB_COLS, count, size[0] / SB_COLS, size[1] / rows);
+        } catch (IOException | java.security.NoSuchAlgorithmException e) {
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "STORYBOARD_FAILED", "Não foi possível gerar as miniaturas");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "INTERRUPTED", "Interrompido");
+        }
+    }
+
+    /** Largura e altura de uma imagem lendo só o cabeçalho. */
+    private static int[] imageSize(Path img) throws IOException {
+        try (javax.imageio.stream.ImageInputStream in = javax.imageio.ImageIO.createImageInputStream(img.toFile())) {
+            java.util.Iterator<javax.imageio.ImageReader> readers = javax.imageio.ImageIO.getImageReaders(in);
+            if (!readers.hasNext()) throw new IOException("formato desconhecido");
+            javax.imageio.ImageReader r = readers.next();
+            try {
+                r.setInput(in);
+                return new int[] { r.getWidth(0), r.getHeight(0) };
+            } finally {
+                r.dispose();
+            }
+        }
+    }
+
     // ---------- token de streaming (a tag <video> não envia cabeçalho Authorization) ----------
 
     private String sign(String data) {
