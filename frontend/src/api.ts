@@ -93,7 +93,7 @@ export type AudioTrack = { index: number; codec?: string; language?: string; tit
 export type SubTrack = { index: number; codec?: string; language?: string; title?: string; textBased: boolean }
 /** Trecho marcado nos capítulos do arquivo que o player oferece pular. */
 export type SkipSegment = { kind: 'intro' | 'recap' | 'credits' | 'preview'; start: number; end: number }
-export type MediaInfo = { duration: number; videoCodec?: string; directPlay: boolean; audio: AudioTrack[]; subtitles: SubTrack[]; skips?: SkipSegment[] }
+export type MediaInfo = { duration: number; videoCodec?: string; directPlay: boolean; audio: AudioTrack[]; subtitles: SubTrack[]; skips?: SkipSegment[]; fonts?: number }
 
 const STATUS: Record<string, string> = {
   FINISHED: 'Finalizado', RELEASING: 'Em exibição', NOT_YET_RELEASED: 'Em breve', CANCELLED: 'Cancelado', HIATUS: 'Em hiato',

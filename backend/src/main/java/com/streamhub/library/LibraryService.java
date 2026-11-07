@@ -49,7 +49,7 @@ public class LibraryService {
     public record SkipSegment(String kind, double start, double end) {}
 
     public record MediaInfo(double duration, String videoCodec, String pixFmt, boolean directPlay,
-                            List<AudioTrack> audio, List<SubTrack> subtitles, List<SkipSegment> skips) {}
+                            List<AudioTrack> audio, List<SubTrack> subtitles, List<SkipSegment> skips, int fonts) {}
 
     record Chapter(String title, double start, double end) {}
 
@@ -239,7 +239,7 @@ public class LibraryService {
         if (cached != null) return cached;
         try {
             String output = run(30, "ffprobe", "-v", "error", "-show_entries",
-                "stream=codec_type,codec_name,pix_fmt,channels:stream_tags=language,title:format=duration"
+                "stream=codec_type,codec_name,pix_fmt,channels:stream_tags=language,title,mimetype,filename:format=duration"
                     + ":chapter=start_time,end_time:chapter_tags=title",
                 "-of", "compact=p=0", p.toString());
             double duration = 0;
@@ -247,6 +247,7 @@ public class LibraryService {
             List<AudioTrack> audio = new ArrayList<>();
             List<SubTrack> subs = new ArrayList<>();
             List<Chapter> chapters = new ArrayList<>();
+            int fonts = 0;
             for (String line : output.split("\n")) {
                 java.util.Map<String, String> kv = new java.util.HashMap<>();
                 for (String part : line.trim().split("\\|")) {
@@ -270,6 +271,8 @@ public class LibraryService {
                 } else if ("subtitle".equals(type)) {
                     String codec = kv.get("codec_name");
                     subs.add(new SubTrack(subs.size(), codec, kv.get("tag:language"), kv.get("tag:title"), TEXT_SUBS.contains(codec)));
+                } else if ("attachment".equals(type) && isFont(kv.get("tag:mimetype"), kv.get("tag:filename"))) {
+                    fonts++;
                 }
             }
             String ext = ext(p);
@@ -277,7 +280,7 @@ public class LibraryService {
                 && vcodec != null && Set.of("h264", "vp8", "vp9", "av1").contains(vcodec)
                 && "yuv420p".equals(pix)
                 && (audio.isEmpty() || Set.of("aac", "mp3", "opus", "vorbis", "flac").contains(audio.get(0).codec()));
-            MediaInfo info = new MediaInfo(duration, vcodec, pix, directPlay, audio, subs, skipsFromChapters(chapters));
+            MediaInfo info = new MediaInfo(duration, vcodec, pix, directPlay, audio, subs, skipsFromChapters(chapters), fonts);
             infoCache.put(key, info);
             return info;
         } catch (IOException e) {
@@ -372,6 +375,71 @@ public class LibraryService {
             return run(90, "ffmpeg", "-v", "error", "-nostdin", "-i", p.toString(), "-map", "0:s:" + index, "-f", "webvtt", "pipe:1");
         } catch (IOException e) {
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "SUB_FAILED", "Não foi possível extrair a legenda");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "INTERRUPTED", "Interrompido");
+        }
+    }
+
+    /** Anexo do MKV que é uma fonte (fansubs embutem as fontes usadas nas legendas .ass). */
+    static boolean isFont(String mimetype, String filename) {
+        String m = mimetype == null ? "" : mimetype.toLowerCase();
+        String f = filename == null ? "" : filename.toLowerCase();
+        return m.contains("font") || m.contains("truetype") || m.contains("opentype")
+            || f.endsWith(".ttf") || f.endsWith(".otf") || f.endsWith(".ttc") || f.endsWith(".woff") || f.endsWith(".woff2");
+    }
+
+    /** Legenda .ass/.ssa original, com estilos e posições, para o player desenhar como nos serviços de anime. */
+    public String subtitleAss(String id, int index) {
+        Path p = resolve(id);
+        MediaInfo info = info(id);
+        if (index < 0 || index >= info.subtitles().size()) throw new ApiException(HttpStatus.NOT_FOUND, "NO_SUB", "Legenda não encontrada");
+        String codec = info.subtitles().get(index).codec();
+        if (!"ass".equals(codec) && !"ssa".equals(codec)) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "NOT_ASS", "A legenda não está no formato ASS");
+        }
+        try {
+            return run(90, "ffmpeg", "-v", "error", "-nostdin", "-i", p.toString(), "-map", "0:s:" + index, "-c:s", "copy", "-f", "ass", "pipe:1");
+        } catch (IOException e) {
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "SUB_FAILED", "Não foi possível extrair a legenda");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "INTERRUPTED", "Interrompido");
+        }
+    }
+
+    /** Extrai a n-ésima fonte anexada ao arquivo (guardada em cache no diretório temporário). */
+    public Path font(String id, int n) {
+        Path p = resolve(id);
+        if (n < 0 || n >= info(id).fonts()) throw new ApiException(HttpStatus.NOT_FOUND, "NO_FONT", "Fonte não encontrada");
+        try {
+            List<Integer> idx = new ArrayList<>();
+            String out = run(30, "ffprobe", "-v", "error", "-select_streams", "t", "-show_entries", "stream=index:stream_tags=mimetype,filename",
+                "-of", "compact=p=0", p.toString());
+            for (String line : out.split("\n")) {
+                java.util.Map<String, String> kv = new java.util.HashMap<>();
+                for (String part : line.trim().split("\\|")) {
+                    String[] a = part.split("=", 2);
+                    if (a.length == 2) kv.put(a[0], a[1]);
+                }
+                if (kv.containsKey("index") && isFont(kv.get("tag:mimetype"), kv.get("tag:filename"))) idx.add(Integer.parseInt(kv.get("index")));
+            }
+            if (n >= idx.size()) throw new ApiException(HttpStatus.NOT_FOUND, "NO_FONT", "Fonte não encontrada");
+            byte[] h = MessageDigest.getInstance("SHA-256").digest((p + "|" + p.toFile().lastModified() + "|" + idx.get(n)).getBytes(StandardCharsets.UTF_8));
+            Path dir = Path.of(System.getProperty("java.io.tmpdir"), "streamhub-fonts");
+            Files.createDirectories(dir);
+            Path target = dir.resolve(java.util.HexFormat.of().formatHex(h, 0, 16));
+            if (!Files.exists(target)) {
+                Path part = Files.createTempFile(dir, "font", ".part");
+                Files.delete(part); // o ffmpeg recusa sobrescrever sem -y; deixa o nome livre
+                // -dump_attachment grava o anexo; sem saída, o ffmpeg termina com erro depois de gravar, o que é esperado
+                run(60, "ffmpeg", "-v", "error", "-nostdin", "-y", "-dump_attachment:" + idx.get(n), part.toString(), "-i", p.toString());
+                if (!Files.exists(part) || Files.size(part) == 0) throw new IOException("anexo vazio");
+                Files.move(part, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            }
+            return target;
+        } catch (IOException | NumberFormatException | java.security.NoSuchAlgorithmException e) {
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "FONT_FAILED", "Não foi possível extrair a fonte");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "INTERRUPTED", "Interrompido");

@@ -95,6 +95,21 @@ public class LibraryController {
         return service.subtitleVtt(id, index);
     }
 
+    @GetMapping(value = "/stream/{id}/subtitle/{index}/ass", produces = "text/plain;charset=UTF-8")
+    public String subtitleAss(@PathVariable String id, @PathVariable int index, @RequestParam String token) {
+        service.verifyToken(id, token);
+        return service.subtitleAss(id, index);
+    }
+
+    @GetMapping("/stream/{id}/font/{n}")
+    public ResponseEntity<Resource> font(@PathVariable String id, @PathVariable int n, @RequestParam String token) {
+        service.verifyToken(id, token);
+        return ResponseEntity.ok()
+            .contentType(MediaType.APPLICATION_OCTET_STREAM)
+            .header("Cache-Control", "private, max-age=86400")
+            .body(new FileSystemResource(service.font(id, n)));
+    }
+
     public record DeleteRequest(List<String> ids) {}
 
     @PostMapping("/delete")

@@ -4,6 +4,7 @@ import { ArrowLeft, Check, Loader2, Maximize, Minimize, Pause, Play, RotateCcw, 
 import { api, type AudioTrack, type GuideEpisode, type LibraryFile, type MediaInfo, type SubTrack } from '../api'
 import { Notice } from '../components/ui'
 import { parseVtt, subtitleAt, transcodeStart, type Cue } from '../lib/subtitles'
+import JASSUB from 'jassub'
 
 const LANGS: Record<string, string> = {
   por: 'Português', eng: 'Inglês', jpn: 'Japonês', spa: 'Espanhol', fre: 'Francês', ger: 'Alemão', ita: 'Italiano',
@@ -55,6 +56,10 @@ export default function Watch() {
   const [audio, setAudio] = useState(0)
   const [subIdx, setSubIdx] = useState(-1)
   const [cues, setCues] = useState<Cue[]>([])
+  // legenda .ass original (estilos, falas no topo, placas), desenhada pelo libass no navegador
+  const [ass, setAss] = useState<string>()
+  const [assFailed, setAssFailed] = useState(false)
+  const assRenderer = useRef<JASSUB>()
   const [subtitleDelay, setSubtitleDelay] = useState(0)
   const [subtitleText, setSubtitleText] = useState('')
   const changeSubtitleDelay = (value: number) => {
@@ -158,23 +163,75 @@ export default function Watch() {
     return () => { dead = true }
   }, [id, posKey])
 
-  // legenda selecionada
+  // legenda selecionada: .ass vai para o libass; as demais (ou se o libass falhar) viram texto simples
+  const subCodec = info?.subtitles.find((s) => s.index === subIdx)?.codec
+  const useAss = (subCodec === 'ass' || subCodec === 'ssa') && !assFailed
   useEffect(() => {
-    setCues([])
+    setCues([]); setAss(undefined)
     if (subIdx < 0 || !token) return
     let dead = false
+    if (useAss) {
+      fetch(`/api/library/stream/${id}/subtitle/${subIdx}/ass?token=${encodeURIComponent(token)}`)
+        .then((r) => (r.ok ? r.text() : Promise.reject()))
+        .then((t) => { if (!dead) setAss(t) })
+        .catch(() => { if (!dead) setAssFailed(true) })
+      return () => { dead = true }
+    }
     fetch(`/api/library/stream/${id}/subtitle/${subIdx}?token=${encodeURIComponent(token)}`)
       .then((r) => (r.ok ? r.text() : Promise.reject()))
       .then((t) => { if (!dead) setCues(parseVtt(t)) })
       .catch(() => { if (!dead) setErr('Não foi possível carregar a legenda selecionada.') })
     return () => { dead = true }
-  }, [subIdx, token, id])
+  }, [subIdx, token, id, useAss])
+
+  useEffect(() => { setAssFailed(false) }, [id])
+
 
   const src = token
     ? mode === 'direct'
       ? `/api/library/stream/${id}?token=${encodeURIComponent(token)}&r=${reload}`
       : `/api/library/stream/${id}/transcode?token=${encodeURIComponent(token)}&start=${transcodeStart(offset)}&audio=${audio}&r=${reload}`
     : undefined
+
+  // O <video> é recriado a cada troca de src (key), então o renderizador acompanha.
+  useEffect(() => {
+    const v = video.current
+    if (!ass || !v || !token) return
+    let r: JASSUB
+    try {
+      r = new JASSUB({
+        video: v,
+        subContent: ass,
+        workerUrl: '/jassub/jassub-worker.js',
+        wasmUrl: '/jassub/jassub-worker.wasm',
+        modernWasmUrl: '/jassub/jassub-worker-modern.wasm',
+        legacyWasmUrl: '/jassub/jassub-worker.wasm.js',
+        availableFonts: { 'liberation sans': '/jassub/default.woff2' },
+        fallbackFont: 'liberation sans',
+        fonts: Array.from({ length: info?.fonts ?? 0 }, (_, n) => `/api/library/stream/${id}/font/${n}?token=${encodeURIComponent(token)}`),
+        useLocalFonts: false,
+      })
+    } catch {
+      setAssFailed(true)
+      return
+    }
+    const onError = () => setAssFailed(true)
+    r.addEventListener('error', onError)
+    assRenderer.current = r
+    return () => {
+      r.removeEventListener('error', onError)
+      const parent = (r as unknown as { _canvasParent?: HTMLElement })._canvasParent
+      r.destroy()
+      parent?.remove() // o <video> antigo já saiu do DOM, então o destroy não acha o pai
+      if (assRenderer.current === r) assRenderer.current = undefined
+    }
+  }, [ass, src, token, id, info?.fonts])
+
+  // tempo da legenda = tempo do vídeo + início da conversão − atraso escolhido
+  useEffect(() => {
+    const r = assRenderer.current
+    if (r) (r as unknown as { timeOffset: number }).timeOffset = (mode === 'transcode' ? Number(transcodeStart(offset)) : 0) - subtitleDelay
+  })
 
   // Read the actual media clock on each animation frame, including pauses, seeks and speed changes.
   useEffect(() => {
@@ -378,7 +435,7 @@ export default function Watch() {
         )}
         {subtitleText && (
           <div className={`pointer-events-none absolute inset-x-0 flex justify-center px-3 text-center transition-all sm:px-6 ${uiVisible ? 'bottom-24 sm:bottom-24' : 'bottom-6 sm:bottom-8'}`}>
-            <span className="whitespace-pre-line rounded bg-black/55 px-2 py-1 text-[15px] font-medium leading-snug text-white [text-shadow:0_1px_3px_#000] sm:text-lg md:text-2xl">{subtitleText}</span>
+            <span className="anime-sub whitespace-pre-line">{subtitleText}</span>
           </div>
         )}
         {skip && !menu && !volOpen && (
