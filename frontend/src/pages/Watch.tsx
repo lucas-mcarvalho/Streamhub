@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Check, LayoutGrid, Loader2, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-react'
-import { api, type AudioTrack, type GuideEpisode, type LibraryFile, type MediaInfo, type SubTrack } from '../api'
+import { api, authHeaders, type AudioTrack, type GuideEpisode, type LibraryFile, type MediaInfo, type SkipSegment, type SubTrack } from '../api'
 import { Notice } from '../components/ui'
 import { parseVtt, subtitleAt, transcodeStart, type Cue } from '../lib/subtitles'
 import JASSUB from 'jassub'
@@ -37,6 +37,34 @@ function fmt(t: number) {
 }
 
 const coarse = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
+
+type Storyboard = { url: string; interval: number; cols: number; count: number; w: number; h: number }
+const SEGMENT_NAMES: Record<SkipSegment['kind'], string> = { intro: 'Abertura', recap: 'Recapitulação', credits: 'Encerramento', preview: 'Prévia' }
+
+/** Quadro do vídeo e tempo no ponto da barra sob o ponteiro, recortado da grade de miniaturas. */
+function SeekPreview({ hover, board, segment }: { hover: { x: number; width: number; t: number }; board?: Storyboard; segment?: SkipSegment['kind'] }) {
+  const pw = board ? Math.min(board.w, Math.max(120, hover.width * 0.4)) : 0
+  const scale = board ? pw / board.w : 1
+  const boxW = board ? pw : 72
+  const left = Math.max(0, Math.min(hover.x - boxW / 2, hover.width - boxW))
+  const n = board ? Math.min(board.count - 1, Math.max(0, Math.floor(hover.t / board.interval))) : 0
+  return (
+    <div className="pointer-events-none absolute bottom-full z-20 mb-2 flex flex-col items-center gap-1" style={{ left, width: boxW }}>
+      {board && (
+        <div className="overflow-hidden rounded-md border border-white/30 bg-black shadow-2xl"
+          style={{
+            width: pw, height: board.h * scale,
+            backgroundImage: `url(${board.url})`,
+            backgroundSize: `${board.cols * board.w * scale}px auto`,
+            backgroundPosition: `${-(n % board.cols) * board.w * scale}px ${-Math.floor(n / board.cols) * board.h * scale}px`,
+          }} />
+      )}
+      <span className="rounded bg-black/80 px-2 py-0.5 text-center text-xs font-semibold tabular-nums text-white">
+        {segment && <span className="mr-1.5 font-normal text-zinc-300">{SEGMENT_NAMES[segment]}</span>}{fmt(hover.t)}
+      </span>
+    </div>
+  )
+}
 
 export default function Watch() {
   const { id = '' } = useParams()
@@ -137,6 +165,38 @@ export default function Watch() {
     const label = s.kind === 'intro' ? 'Pular abertura' : s.kind === 'recap' ? 'Pular recapitulação' : 'Pular encerramento'
     return { seg: s, label, go: () => seek(s.end) }
   }, [info, abs, duration, next]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // prévia da barra de tempo: grade de miniaturas gerada no servidor, pedida só depois que o vídeo começou a tocar
+  // (gerar lê o arquivo inteiro e não deve atrasar o início da reprodução)
+  const [started, setStarted] = useState(false)
+  const [board, setBoard] = useState<Storyboard>()
+  const [hover, setHover] = useState<{ x: number; width: number; t: number }>()
+  useEffect(() => { setStarted(false); setBoard(undefined); setHover(undefined) }, [id])
+  useEffect(() => {
+    if (!started) return
+    let dead = false
+    let url: string | undefined
+    fetch(`/api/library/${id}/storyboard`, { headers: authHeaders() })
+      .then(async (r) => {
+        if (!r.ok) throw new Error()
+        const meta = Object.fromEntries((r.headers.get('X-Storyboard') ?? '').split(';').map((kv) => kv.split('=')).map(([k, v]) => [k, Number(v)]))
+        const blob = await r.blob()
+        if (dead || !(meta.interval > 0 && meta.cols > 0 && meta.count > 0 && meta.w > 0 && meta.h > 0)) return
+        url = URL.createObjectURL(blob)
+        setBoard({ url, interval: meta.interval, cols: meta.cols, count: meta.count, w: meta.w, h: meta.h })
+      })
+      .catch(() => { /* sem miniaturas: a prévia mostra só o tempo */ })
+    return () => { dead = true; if (url) URL.revokeObjectURL(url) }
+  }, [started, id])
+  // posição do ponteiro → tempo, com a mesma conta do <input type=range> (o centro do botão vai de 8 px a largura − 8 px)
+  const onSeekHover = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType !== 'mouse' && e.buttons === 0) return // no toque, só enquanto arrasta
+    const r = e.currentTarget.getBoundingClientRect()
+    const x = Math.max(0, Math.min(e.clientX - r.left, r.width))
+    const frac = r.width > 16 ? Math.max(0, Math.min(1, (x - 8) / (r.width - 16))) : 0
+    setHover({ x, width: r.width, t: frac * duration })
+  }
+  useEffect(() => { if (!showUi && playing) setHover(undefined) }, [showUi, playing])
 
   // carrega informações, token e lista da biblioteca
   useEffect(() => {
@@ -412,7 +472,7 @@ export default function Watch() {
         {src && (
           <video key={src} ref={video} src={src} autoPlay playsInline className="h-full w-full" onClick={onTap} onDoubleClick={() => { if (!touch) fullscreen() }}
             onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
-            onWaiting={() => setWaiting(true)} onPlaying={() => setWaiting(false)} onCanPlay={() => setWaiting(false)}
+            onWaiting={() => setWaiting(true)} onPlaying={() => { setWaiting(false); setStarted(true) }} onCanPlay={() => setWaiting(false)}
             onTimeUpdate={(e) => setCur(e.currentTarget.currentTime)}
             onLoadedMetadata={(e) => {
               if (pending.current != null && mode === 'direct') { e.currentTarget.currentTime = pending.current; pending.current = null }
@@ -490,8 +550,12 @@ export default function Watch() {
         )}
         <div className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent px-3 pt-10 transition-opacity sm:px-4 ${uiVisible ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
           style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}>
-          <input type="range" min={0} max={Math.max(1, Math.floor(duration))} value={Math.floor(abs)} onChange={(e) => seek(Number(e.target.value))}
-            className="seek mb-1 h-5 w-full cursor-pointer accent-accent-500" aria-label="Posição" />
+          <div className="relative" onPointerMove={onSeekHover} onPointerDown={onSeekHover} onPointerLeave={() => setHover(undefined)}
+            onPointerUp={(e) => { if (e.pointerType !== 'mouse') setHover(undefined) }} onPointerCancel={() => setHover(undefined)}>
+            {hover && duration > 0 && <SeekPreview hover={hover} board={board} segment={info?.skips?.find((s) => hover.t >= s.start && hover.t < s.end)?.kind} />}
+            <input type="range" min={0} max={Math.max(1, Math.floor(duration))} value={Math.floor(abs)} onChange={(e) => seek(Number(e.target.value))}
+              className="seek mb-1 h-5 w-full cursor-pointer accent-accent-500" aria-label="Posição" />
+          </div>
           <div className="flex min-w-0 items-center gap-0.5 text-sm sm:gap-1">
             <button onClick={toggle} className={ctl} aria-label="Reproduzir/Pausar">{playing ? <Pause size={22} fill="white" /> : <Play size={22} fill="white" />}</button>
             <button onClick={() => seek(abs - 10)} className={ctl} title="Voltar 10s (←)" aria-label="Voltar 10 segundos"><RotateCcw size={20} /></button>
