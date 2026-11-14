@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { CheckCircle2, ExternalLink, Film, HardDrive, LayoutGrid, Play, Search, Trash2, X } from 'lucide-react'
 import { api, fmtBytes, genrePt, progressOf, type CatalogItem, type GuideEpisode, type LibraryFile } from '../api'
 import ContinueRow from '../components/ContinueRow'
+import { useProgressSync } from '../lib/progress'
 import { useToast } from '../components/Toast'
 import { Bar, Chip, PageTitle, PosterSkeleton, Score, Spinner } from '../components/ui'
 import { useAsync } from '../hooks'
@@ -74,10 +75,17 @@ function Detail({ g, meta, onClose, onChanged }: { g: Group; meta: Meta; onClose
     catch (e) { toast((e as Error).message, 'err') }
   }
   const genres = (meta?.genres ?? []).map((x) => (anime ? genrePt(x) : x))
+  // andamento do título: episódios vistos até o fim contam inteiros, e o que está pela metade conta a sua parte
+  const episodes = g.files.filter((f) => f.episode != null)
+  const counted = episodes.length > 1 ? episodes : g.files
+  const watched = counted.filter((f) => progressOf(f.id).done).length
+  const overall = counted.reduce((sum, f) => { const p = progressOf(f.id); return sum + (p.done ? 1 : p.ratio) }, 0) / counted.length
   return (
-    <motion.div className="fixed inset-0 z-50 flex justify-end bg-black/70 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
-      <motion.aside className="h-full w-full max-w-2xl overflow-y-auto bg-canvas shadow-2xl ring-1 ring-line" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
-        transition={{ type: 'spring', damping: 30, stiffness: 280 }} onClick={(e) => e.stopPropagation()}>
+    <motion.div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm sm:p-6" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
+      {/* janela no meio da tela; no celular ocupa a tela inteira */}
+      <motion.aside role="dialog" aria-modal="true" className="h-full w-full max-w-4xl overflow-y-auto bg-canvas shadow-2xl ring-1 ring-line sm:h-auto sm:max-h-full sm:rounded-2xl"
+        initial={{ opacity: 0, scale: 0.94, y: 24 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.94, y: 24 }}
+        transition={{ type: 'spring', damping: 30, stiffness: 320 }} onClick={(e) => e.stopPropagation()}>
         <div className="relative h-60">
           {(meta?.backdropUrl || meta?.posterUrl) && <img src={meta.backdropUrl ?? meta.posterUrl} alt="" className="h-full w-full object-cover opacity-70" />}
           <div className="absolute inset-0 bg-gradient-to-t from-canvas to-transparent" />
@@ -95,6 +103,15 @@ function Detail({ g, meta, onClose, onChanged }: { g: Group; meta: Meta; onClose
             <button onClick={() => remove(g.files.map((f) => f.id), `todos os ${g.files.length} arquivo(s)`)} className="inline-flex items-center gap-2 rounded-lg border border-line px-3 py-1.5 text-sm text-zinc-400 hover:border-red-500/60 hover:text-red-400"><Trash2 size={14} />Apagar tudo</button>
             <span className="ml-auto self-center text-xs text-zinc-500">{g.files.length} arquivo(s) · {fmtBytes(g.size)}</span>
           </div>
+          {counted.length > 1 && (
+            <div className="mb-6">
+              <div className="mb-1.5 flex items-baseline justify-between text-xs">
+                <span className="font-semibold text-zinc-300">{watched} de {counted.length} episódios assistidos</span>
+                <span className="tabular-nums text-zinc-500">{Math.round(overall * 100)}%</span>
+              </div>
+              <Bar percent={overall * 100} />
+            </div>
+          )}
           {seasons.map(([label, fs]) => (
             <div key={label} className="mb-6">
               <h3 className="mb-2 text-xs font-bold uppercase tracking-widest text-accent-400">{label}</h3>
@@ -111,7 +128,7 @@ function Detail({ g, meta, onClose, onChanged }: { g: Group; meta: Meta; onClose
                         <span className="absolute inset-0 grid place-items-center bg-black/25 transition group-hover:bg-black/45">
                           <span className="grid h-10 w-10 place-items-center rounded-full bg-accent-600/90 shadow-lg transition group-hover:scale-110"><Play size={18} fill="white" className="ml-0.5" /></span>
                         </span>
-                        {p.ratio > 0 && !p.done && <div className="absolute inset-x-0 bottom-0"><Bar percent={p.ratio * 100} /></div>}
+                        {(p.done || p.ratio > 0) && <div className="absolute inset-x-0 bottom-0"><Bar percent={p.done ? 100 : p.ratio * 100} /></div>}
                       </Link>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-baseline gap-2">
@@ -122,6 +139,7 @@ function Detail({ g, meta, onClose, onChanged }: { g: Group; meta: Meta; onClose
                         </div>
                         {ep?.overview && <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-zinc-400 sm:line-clamp-3 sm:text-sm">{ep.overview}</p>}
                         <div className="mt-1 truncate text-[11px] text-zinc-600">{ep?.runtime ? <span className="sm:hidden">{ep.runtime} min · </span> : null}{f.name} · {fmtBytes(f.sizeBytes)}</div>
+                        {p.ratio > 0 && !p.done && <div className="mt-0.5 text-[11px] text-zinc-500">Parou em {Math.round(p.ratio * 100)}%</div>}
                       </div>
                       <button title="Apagar arquivo" onClick={() => remove([f.id], `"${f.name}"`)} className="self-start p-1.5 text-zinc-500 opacity-0 transition hover:text-red-400 group-hover:opacity-100 max-md:opacity-100"><Trash2 size={16} /></button>
                     </motion.li>
@@ -137,6 +155,7 @@ function Detail({ g, meta, onClose, onChanged }: { g: Group; meta: Meta; onClose
 }
 
 export default function Library() {
+  useProgressSync()
   const [params, setParams] = useSearchParams()
   const raw = params.get('tab')
   const scope: Scope = raw === 'cinema' || raw === 'anime' ? raw : 'all'

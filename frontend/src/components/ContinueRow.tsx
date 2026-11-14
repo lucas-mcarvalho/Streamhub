@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Play } from 'lucide-react'
 import { authHeaders, progressOf, type LibraryFile } from '../api'
+import { useProgressSync } from '../lib/progress'
 import { Bar, SectionTitle } from './ui'
 
 const fmt = (t: number) => {
@@ -32,8 +33,9 @@ function Frame({ id, pos }: { id: string; pos: number }) {
   )
 }
 
-/** "Continuar assistindo" com base no progresso salvo pelo player neste navegador. */
+/** "Continuar assistindo" com base no progresso salvo pelo player. */
 export default function ContinueRow({ files }: { files: LibraryFile[] }) {
+  useProgressSync()
   const items = files.map((f) => ({ f, p: progressOf(f.id) }))
     .filter((x) => x.p.pos > 5 && !x.p.done).sort((a, b) => b.p.last - a.p.last).slice(0, 8)
   if (items.length === 0) return null

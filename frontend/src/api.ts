@@ -112,7 +112,7 @@ const GENRES: Record<string, string> = {
 }
 export const genrePt = (g: string) => GENRES[g] ?? g
 
-/** Progresso local de reprodução (guardado pelo player no navegador). */
+/** Progresso de reprodução na cópia deste navegador; quem grava e sincroniza com o servidor é lib/progress. */
 export const progressOf = (id: string) => {
   try {
     const pos = Number(localStorage.getItem('streamhub.pos.' + id)) || 0

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Check, LayoutGrid, Loader2, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-react'
-import { api, authHeaders, type AudioTrack, type GuideEpisode, type LibraryFile, type MediaInfo, type SkipSegment, type SubTrack } from '../api'
+import { api, authHeaders, progressOf, type AudioTrack, type GuideEpisode, type LibraryFile, type MediaInfo, type SkipSegment, type SubTrack } from '../api'
 import { Notice } from '../components/ui'
+import EpisodeGrid, { guideOf } from '../components/EpisodeGrid'
 import { parseVtt, subtitleAt, transcodeStart, type Cue } from '../lib/subtitles'
 import { attachStream, mseSupported } from '../lib/mseStream'
+import { saveProgress, syncProgress } from '../lib/progress'
 import JASSUB from 'jassub'
 
 const LANGS: Record<string, string> = {
@@ -67,6 +69,31 @@ function SeekPreview({ hover, board, segment }: { hover: { x: number; width: num
   )
 }
 
+/** Cartão com a capa e o nome do próximo episódio, acima do botão. Sem capa no guia, usa um quadro do próprio arquivo. */
+function NextPreview({ file, still, label }: { file: LibraryFile; still?: string; label: string }) {
+  const [frame, setFrame] = useState<string>()
+  useEffect(() => {
+    if (still) return
+    let dead = false
+    let url: string | undefined
+    fetch(`/api/library/${file.id}/thumb?t=300&w=480`, { headers: authHeaders() })
+      .then((r) => (r.ok ? r.blob() : Promise.reject()))
+      .then((b) => { if (!dead) { url = URL.createObjectURL(b); setFrame(url) } })
+      .catch(() => { /* sem miniatura: fica só o nome */ })
+    return () => { dead = true; if (url) URL.revokeObjectURL(url) }
+  }, [file.id, still])
+  const src = still ?? frame
+  return (
+    <span className="pointer-events-none absolute bottom-full right-0 z-30 mb-2 block w-56 overflow-hidden rounded-lg border border-white/20 bg-zinc-900 text-left text-white shadow-2xl sm:w-64">
+      <span className="block aspect-video bg-black">{src && <img src={src} alt="" className="h-full w-full object-cover" />}</span>
+      <span className="block px-3 py-2">
+        <span className="block text-[11px] font-normal uppercase tracking-wide text-zinc-400">Próximo episódio</span>
+        <span className="line-clamp-2 block text-xs font-semibold leading-snug">{label}</span>
+      </span>
+    </span>
+  )
+}
+
 export default function Watch() {
   const { id = '' } = useParams()
   const nav = useNavigate()
@@ -74,7 +101,6 @@ export default function Watch() {
   const video = useRef<HTMLVideoElement>(null)
   const pending = useRef<number | null>(null)
   const hideTimer = useRef<number>()
-  const posKey = 'streamhub.pos.' + id
 
   const [info, setInfo] = useState<MediaInfo>()
   const [token, setToken] = useState<string>()
@@ -136,8 +162,8 @@ export default function Watch() {
       .then((g) => { if (!dead) setGuide(g) }).catch(() => {})
     return () => { dead = true }
   }, [file?.group, file?.kind]) // eslint-disable-line react-hooks/exhaustive-deps
-  const episodeTitle = file?.episode == null ? undefined
-    : guide.find((e) => (file.season != null ? e.season === file.season && e.number === file.episode : e.absolute === file.episode))?.name
+  const guideName = (f?: LibraryFile) => guideOf(guide, f)?.name
+  const episodeTitle = guideName(file)
   const episodeLabel = file?.season != null ? `T${file.season} · Episódio ${file.episode}` : file?.episode != null ? `Episódio ${file.episode}` : ''
   const next = useMemo(() => {
     const i = files.findIndex((f) => f.id === id)
@@ -147,6 +173,36 @@ export default function Watch() {
     const i = files.findIndex((f) => f.id === id)
     return i > 0 && files[i - 1].group === files[i].group ? files[i - 1] : undefined
   }, [files, id])
+  // "Episódio 10 — Nome", para os botões de próximo episódio dizerem o que vem a seguir
+  const nextName = guideName(next)
+  const nextLabel = !next ? '' : next.episode == null ? next.name
+    : `${next.season != null ? `T${next.season} · ` : ''}Episódio ${next.episode}${nextName ? ' — ' + nextName : ''}`
+
+  // Assistido: chegou ao encerramento (ou à prévia do próximo) ou passou de 90% — quase ninguém vê os créditos até o
+  // último segundo, e quem pula para o próximo episódio nunca chega ao fim do arquivo.
+  const endingStart = useMemo(() => {
+    const starts = (info?.skips ?? [])
+      .filter((s) => (s.kind === 'credits' || s.kind === 'preview') && (s.kind === 'preview' || duration - s.end < 150) && s.start > duration * 0.5)
+      .map((s) => s.start)
+    return Math.min(duration * 0.9, ...starts)
+  }, [info, duration])
+  const persist = () => {
+    if (!info || !(duration > 0) || abs <= 0) return
+    saveProgress(id, abs >= endingStart ? { pos: 0, dur: duration, done: true } : { pos: abs, dur: duration })
+  }
+  const persistRef = useRef(persist)
+  persistRef.current = persist
+  const goTo = (f: LibraryFile) => { persist(); nav('/watch/' + f.id) }
+
+  // lista de episódios do título, abaixo do player
+  const series = useMemo(() => (file ? files.filter((f) => f.group === file.group && f.kind === file.kind) : []), [files, file?.group, file?.kind]) // eslint-disable-line react-hooks/exhaustive-deps
+  const onPickEpisode = useCallback(() => persistRef.current(), [])
+  const [progressVersion, setProgressVersion] = useState(0)
+  useEffect(() => { window.scrollTo({ top: 0 }) }, [id])
+  // miniatura do próximo episódio ao passar o mouse nos botões de próximo
+  const [nextHover, setNextHover] = useState<'bar' | 'skip'>()
+  useEffect(() => { setNextHover(undefined) }, [id])
+  const nextPreview = next && <NextPreview file={next} still={guideOf(guide, next)?.stillUrl} label={nextLabel} />
 
   // pular abertura/recapitulação/encerramento, a partir dos capítulos do arquivo
   const [autoSkip, setAutoSkip] = useState(() => { try { return localStorage.getItem('streamhub.autoSkip') === '1' } catch { return false } })
@@ -161,11 +217,11 @@ export default function Watch() {
     if (!s) return undefined
     const endsEpisode = s.kind === 'preview' || duration - s.end < 150
     if ((s.kind === 'credits' || s.kind === 'preview') && endsEpisode) {
-      return next ? { seg: s, label: 'Próximo episódio', go: () => nav('/watch/' + next.id) } : undefined
+      return next ? { seg: s, label: 'Próximo episódio', detail: nextLabel, go: () => goTo(next) } : undefined
     }
     const label = s.kind === 'intro' ? 'Pular abertura' : s.kind === 'recap' ? 'Pular recapitulação' : 'Pular encerramento'
-    return { seg: s, label, go: () => seek(s.end) }
-  }, [info, abs, duration, next]) // eslint-disable-line react-hooks/exhaustive-deps
+    return { seg: s, label, detail: '', go: () => seek(s.end) }
+  }, [info, abs, duration, next, nextLabel]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // prévia da barra de tempo: grade de miniaturas gerada no servidor, pedida só depois que o vídeo começou a tocar
   // (gerar lê o arquivo inteiro e não deve atrasar o início da reprodução)
@@ -206,23 +262,24 @@ export default function Watch() {
     const savedDelay = Number(localStorage.getItem('streamhub.subtitleDelay.' + id))
     setSubtitleDelay(Number.isFinite(savedDelay) ? Math.max(-120, Math.min(120, savedDelay)) : 0)
     setInfo(undefined); setToken(undefined); setErr(undefined); setCues([]); setCur(0); setOffset(0); setAudio(0); setWaiting(true)
-    Promise.all([api<MediaInfo>(`/library/${id}/info`), api<{ token: string }>(`/library/${id}/token`)])
+    // o progresso vem do servidor antes, para continuar de onde parou mesmo que tenha sido em outro aparelho
+    Promise.all([api<MediaInfo>(`/library/${id}/info`), api<{ token: string }>(`/library/${id}/token`), syncProgress()])
       .then(([i, t]) => {
         if (dead) return
-        const saved = Number(localStorage.getItem(posKey))
+        setProgressVersion((v) => v + 1)
+        const saved = progressOf(id).pos
         pending.current = saved > 5 && saved < i.duration - 30 ? saved : null
         setMode(i.directPlay ? 'direct' : 'transcode')
         if (!i.directPlay && pending.current != null) { setOffset(pending.current); pending.current = null }
         const pt = i.subtitles.find((s) => s.language === 'por' && s.textBased && /brazil/i.test(s.title ?? ''))
           ?? i.subtitles.find((s) => s.language === 'por' && s.textBased)
         setSubIdx(pt ? pt.index : -1)
-        localStorage.setItem('streamhub.dur.' + id, String(i.duration))
         setInfo(i); setToken(t.token)
       })
       .catch((e) => { if (!dead) setErr(e.message) })
     api<LibraryFile[]>('/library').then((list) => { if (!dead) setFiles(list) }).catch(() => {})
     return () => { dead = true }
-  }, [id, posKey])
+  }, [id])
 
   // legenda selecionada: .ass vai para o libass; as demais (ou se o libass falhar) viram texto simples
   const subCodec = info?.subtitles.find((s) => s.index === subIdx)?.codec
@@ -319,10 +376,12 @@ export default function Watch() {
   }, [cues, subtitleDelay, mode, offset, src])
 
   // salva posição
+  // (o intervalo não pode depender da posição: ela muda várias vezes por segundo e ele nunca chegaria a disparar)
   useEffect(() => {
-    const t = setInterval(() => { if (playing && abs > 0) { localStorage.setItem(posKey, String(abs)); localStorage.setItem('streamhub.last.' + id, String(Date.now())); localStorage.removeItem('streamhub.done.' + id) } }, 5000)
+    if (!playing) return
+    const t = setInterval(() => persistRef.current(), 5000)
     return () => clearInterval(t)
-  }, [playing, abs, posKey, id])
+  }, [playing, id])
 
   // travou (sem dados por vários segundos) ou o fluxo acabou antes da hora: reabre o vídeo na posição atual,
   // o mesmo que voltar 10 s à mão
@@ -439,6 +498,9 @@ export default function Watch() {
     hideTimer.current = window.setTimeout(() => { if (!menuOpen.current) setShowUi(false) }, 3000)
   }
 
+  // ao trocar de episódio, os controles (com o nome do episódio no topo) aparecem por alguns segundos
+  useEffect(() => { poke() }, [id]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // toque: 1 toque mostra/esconde os controles, 2 toques nas laterais pulam 10 s, 2 toques no centro pausam
   const onTap = (e: React.MouseEvent<HTMLElement>) => {
     if (menu) { setMenu(false); return }
@@ -483,7 +545,7 @@ export default function Watch() {
         className={`overflow-hidden bg-black ${fake ? 'fixed inset-0 z-[100] h-[100dvh] w-screen' : fs ? 'h-full w-full' : 'relative mx-auto aspect-video max-h-[calc(100dvh-5.5rem)] w-full rounded-lg'} ${uiVisible ? '' : 'cursor-none'}`}>
         {src && (
           <video key={src + (useMse ? '|mse' : '')} ref={video} src={useMse ? undefined : src} autoPlay playsInline className="h-full w-full" onClick={onTap} onDoubleClick={() => { if (!touch) fullscreen() }}
-            onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
+            onPlay={() => setPlaying(true)} onPause={() => { setPlaying(false); persist() }}
             onWaiting={() => setWaiting(true)} onPlaying={() => { setWaiting(false); setStarted(true) }} onCanPlay={() => setWaiting(false)}
             onTimeUpdate={(e) => setCur(e.currentTarget.currentTime)}
             onLoadedMetadata={(e) => {
@@ -491,7 +553,7 @@ export default function Watch() {
             }}
             onEnded={() => {
               if (mode === 'transcode' && duration > 0 && abs < duration - 10 && retries.current < 5) { recover(); return } // fluxo cortado antes do fim
-              localStorage.removeItem(posKey); localStorage.setItem('streamhub.done.' + id, '1'); if (next) nav('/watch/' + next.id) }}
+              saveProgress(id, { pos: 0, dur: duration, done: true }); if (next) nav('/watch/' + next.id) }}
             onError={() => {
               if (mode === 'direct') { setErr(undefined); setOffset(abs); setCur(0); setMode('transcode') }
               else if (abs > 0 && retries.current < 5) recover()
@@ -515,9 +577,15 @@ export default function Watch() {
           </div>
         )}
         {skip && !menu && !volOpen && (
-          <button onClick={skip.go} title={`${skip.label} (s)`}
+          <button onClick={skip.go} title={skip.detail ? undefined : `${skip.label} (s)`}
+            onMouseEnter={() => { if (skip.detail) setNextHover('skip') }} onMouseLeave={() => setNextHover(undefined)}
             className={`absolute right-3 z-10 flex items-center gap-1.5 rounded-md border border-white/40 bg-black/70 px-3 py-1.5 text-xs font-semibold text-white shadow-xl backdrop-blur transition-all hover:bg-white hover:text-black active:scale-95 sm:right-6 sm:gap-2 sm:px-5 sm:py-2.5 sm:text-base ${uiVisible ? 'bottom-[5.5rem] sm:bottom-24' : 'bottom-4 sm:bottom-8'}`}>
-            {skip.label}<SkipForward size={16} />
+            <span className="min-w-0 text-left">
+              <span className="block">{skip.label}</span>
+              {skip.detail && <span className="block max-w-[11rem] truncate text-[11px] font-normal opacity-80 sm:max-w-xs sm:text-xs">{skip.detail}</span>}
+            </span>
+            <SkipForward size={16} className="shrink-0" />
+            {nextHover === 'skip' && skip.detail && nextPreview}
           </button>
         )}
         {file && (
@@ -597,8 +665,8 @@ export default function Watch() {
                 </span>
               )}
               {file && file.episode != null && <Link to={`/episodes/${file.kind}/${encodeURIComponent(file.group)}`} title="Lista de episódios" aria-label="Lista de episódios" className="flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3"><LayoutGrid size={16} /><span className="hidden sm:inline">Episódios</span></Link>}
-              {prev && <button onClick={() => nav('/watch/' + prev.id)} title="Episódio anterior" aria-label="Episódio anterior" className="flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3"><SkipBack size={16} /><span className="hidden sm:inline">Anterior</span></button>}
-              {next && <button onClick={() => nav('/watch/' + next.id)} title="Próximo episódio" aria-label="Próximo episódio" className="flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3"><span className="hidden sm:inline">Próximo</span><SkipForward size={16} /></button>}
+              {prev && <button onClick={() => goTo(prev)} title="Episódio anterior" aria-label="Episódio anterior" className="flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3"><SkipBack size={16} /><span className="hidden sm:inline">Anterior</span></button>}
+              {next && <button onClick={() => goTo(next)} onMouseEnter={() => setNextHover('bar')} onMouseLeave={() => setNextHover(undefined)} aria-label={`Próximo episódio: ${nextLabel}`} className="relative flex h-9 min-w-0 shrink items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3">{nextHover === 'bar' && nextPreview}<span className="hidden min-w-0 sm:inline"><span className="block leading-tight">Próximo</span>{next.episode != null && <span className="hidden max-w-[14rem] truncate text-[11px] font-normal leading-tight text-zinc-300 lg:block">{nextLabel}</span>}</span><SkipForward size={16} className="shrink-0" /></button>}
               <button onClick={() => { setMenu((m) => !m); setVolOpen(false) }} className={ctl} title="Áudio, legenda e velocidade" aria-label="Configurações"><Settings size={20} /></button>
               <button onClick={fullscreen} className={ctl} title="Tela cheia (f)" aria-label="Tela cheia">{expanded ? <Minimize size={20} /> : <Maximize size={20} />}</button>
             </span>
@@ -610,6 +678,12 @@ export default function Watch() {
         {mode === 'transcode' ? 'Convertendo no servidor para o navegador (vídeo/áudio incompatível ou faixa de áudio trocada). ' : 'Reprodução direta. '}
         {touch ? 'Toque duas vezes nas laterais para pular 10 s e no centro para pausar.' : 'Atalhos: espaço = pausar · ←/→ = ±10s · f = tela cheia · m = mudo · s = pular abertura.'}
       </p>
+      {series.length > 1 && (
+        <section className="mt-8">
+          <h2 className="mb-4 font-display text-xl font-bold tracking-wide">Episódios<span className="ml-2 text-sm font-normal text-zinc-400">{file?.group}</span></h2>
+          <EpisodeGrid files={series} guide={guide} currentId={id} onPick={onPickEpisode} version={progressVersion} />
+        </section>
+      )}
     </div>
   )
 }
