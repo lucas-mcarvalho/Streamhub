@@ -4,6 +4,7 @@ import { ArrowLeft, Check, LayoutGrid, Loader2, Maximize, Minimize, Pause, Play,
 import { api, authHeaders, type AudioTrack, type GuideEpisode, type LibraryFile, type MediaInfo, type SkipSegment, type SubTrack } from '../api'
 import { Notice } from '../components/ui'
 import { parseVtt, subtitleAt, transcodeStart, type Cue } from '../lib/subtitles'
+import { attachStream, mseSupported } from '../lib/mseStream'
 import JASSUB from 'jassub'
 
 const LANGS: Record<string, string> = {
@@ -253,6 +254,17 @@ export default function Watch() {
       : `/api/library/stream/${id}/transcode?token=${encodeURIComponent(token)}&start=${transcodeStart(offset)}&audio=${audio}&r=${reload}`
     : undefined
 
+  // Vídeo convertido: a página lê o fluxo e alimenta o player (MediaSource). Deixar o navegador baixar por conta própria
+  // travava: com o buffer cheio ele fechava a conexão e pedia a continuação, que uma conversão ao vivo não tem como dar.
+  const [mseFailed, setMseFailed] = useState(false)
+  useEffect(() => { setMseFailed(false) }, [id])
+  const useMse = mode === 'transcode' && !mseFailed && mseSupported()
+  useEffect(() => {
+    const v = video.current
+    if (!v || !src || !useMse) return
+    return attachStream(v, src, () => setMseFailed(true))
+  }, [src, useMse])
+
   // O <video> é recriado a cada troca de src (key), então o renderizador acompanha.
   useEffect(() => {
     const v = video.current
@@ -285,7 +297,7 @@ export default function Watch() {
       parent?.remove() // o <video> antigo já saiu do DOM, então o destroy não acha o pai
       if (assRenderer.current === r) assRenderer.current = undefined
     }
-  }, [ass, src, token, id, info?.fonts])
+  }, [ass, src, useMse, token, id, info?.fonts])
 
   // tempo da legenda = tempo do vídeo + início da conversão − atraso escolhido
   useEffect(() => {
@@ -418,8 +430,8 @@ export default function Watch() {
     return () => window.removeEventListener('keydown', h)
   }, [toggle, seek, fullscreen, abs, fake, skip])
 
-  useEffect(() => { if (video.current) { video.current.volume = volume; video.current.muted = muted } }, [volume, muted, src])
-  useEffect(() => { if (video.current) video.current.playbackRate = rate }, [rate, src])
+  useEffect(() => { if (video.current) { video.current.volume = volume; video.current.muted = muted } }, [volume, muted, src, useMse])
+  useEffect(() => { if (video.current) video.current.playbackRate = rate }, [rate, src, useMse])
 
   const poke = () => {
     setShowUi(true)
@@ -470,7 +482,7 @@ export default function Watch() {
       <div ref={box} onPointerMove={(e) => { if (e.pointerType === 'mouse') poke() }} onMouseLeave={() => !touch && playing && !menu && setShowUi(false)}
         className={`overflow-hidden bg-black ${fake ? 'fixed inset-0 z-[100] h-[100dvh] w-screen' : fs ? 'h-full w-full' : 'relative mx-auto aspect-video max-h-[calc(100dvh-5.5rem)] w-full rounded-lg'} ${uiVisible ? '' : 'cursor-none'}`}>
         {src && (
-          <video key={src} ref={video} src={src} autoPlay playsInline className="h-full w-full" onClick={onTap} onDoubleClick={() => { if (!touch) fullscreen() }}
+          <video key={src + (useMse ? '|mse' : '')} ref={video} src={useMse ? undefined : src} autoPlay playsInline className="h-full w-full" onClick={onTap} onDoubleClick={() => { if (!touch) fullscreen() }}
             onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
             onWaiting={() => setWaiting(true)} onPlaying={() => { setWaiting(false); setStarted(true) }} onCanPlay={() => setWaiting(false)}
             onTimeUpdate={(e) => setCur(e.currentTarget.currentTime)}
