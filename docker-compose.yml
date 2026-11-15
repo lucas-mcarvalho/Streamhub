@@ -125,6 +125,11 @@ services:
       - ${DATA_ROOT:-./data}/jellyfin/cache:/cache
       - ${MEDIA_ROOT:-./media}:/media
       - ${EXTRA_STORAGE:-./media}:/hd1   # disco extra (HD externo); por padrão repete a pasta de mídia
+      - type: bind   # mesmos caminhos /disks do backend, para as bibliotecas apontarem para os locais registrados no StreamHub
+        source: ${DISKS_DIR:-./disks}
+        target: /disks
+        bind:
+          propagation: rslave
     ports:
       - "8096:8096"
 
