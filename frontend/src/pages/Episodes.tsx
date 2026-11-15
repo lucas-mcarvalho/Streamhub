@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft, CheckCircle2 } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, Play } from 'lucide-react'
 import { api, progressOf, type CatalogItem, type GuideEpisode, type LibraryFile } from '../api'
 import EpisodeGrid from '../components/EpisodeGrid'
 import { Notice, Score, Spinner } from '../components/ui'
 import { useAsync } from '../hooks'
 import { useProgressSync } from '../lib/progress'
+import { qualitiesOf, versionsOf } from '../lib/versions'
+import { fmtTime, resumeLabel, resumeOf } from '../lib/resume'
 
 /** Tela só com os episódios de um título da biblioteca, em grade com capa e estado de assistido. */
 export default function Episodes() {
@@ -17,7 +19,14 @@ export default function Episodes() {
   useProgressSync()
 
   const items = useMemo(() => (files.data ?? []).filter((f) => f.group === group && f.kind === kind), [files.data, group, kind])
-  const watched = items.filter((f) => progressOf(f.id).done).length
+  // um episódio guardado em mais de uma qualidade conta uma vez só, e vale como assistido se alguma versão foi vista
+  const episodes = useMemo(() => {
+    const seen = new Set<string>()
+    return items.map((f) => versionsOf(items, f)).filter((v) => !seen.has(v[0].id) && !!seen.add(v[0].id))
+  }, [items])
+  const watched = episodes.filter((v) => v.some((f) => progressOf(f.id).done)).length
+  const qualities = qualitiesOf(items)
+  const resume = resumeOf(items)
 
   if (files.error) return <Notice text={files.error} />
   if (files.loading) return <Spinner />
@@ -35,9 +44,15 @@ export default function Episodes() {
             <h1 className="font-display text-3xl font-bold tracking-wide sm:text-4xl">{m?.title ?? group}</h1>
             <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-zinc-400">
               <Score value={m?.rating} />
-              <span>{items.length} episódio(s)</span>
+              <span>{episodes.length} episódio(s)</span>
+              {qualities.length > 0 && <span title="Qualidade dos arquivos">{qualities.join(' · ')}</span>}
               <span className="flex items-center gap-1 text-emerald-400"><CheckCircle2 size={14} />{watched} assistido(s)</span>
             </div>
+            {resume && (
+              <Link to={`/watch/${resume.file.id}`} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-accent-600 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-500">
+                <Play size={15} fill="white" />{resumeLabel(resume)}{resume.mode === 'continue' && <span className="font-normal tabular-nums opacity-80">· {fmtTime(resume.pos)}</span>}
+              </Link>
+            )}
           </div>
         </div>
       </div>

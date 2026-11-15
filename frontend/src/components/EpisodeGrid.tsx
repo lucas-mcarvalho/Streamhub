@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { ArrowDownWideNarrow, ArrowUpNarrowWide, CheckCircle2, Circle, Play, Search } from 'lucide-react'
 import { progressOf, type GuideEpisode, type LibraryFile } from '../api'
 import { saveProgress } from '../lib/progress'
+import { byQuality, carryProgress, preferredVersion, versionLabel } from '../lib/versions'
 import { Bar } from './ui'
 
 /** Episódio do guia (nome, capa) correspondente a um arquivo da biblioteca. */
@@ -32,19 +33,28 @@ function EpisodeGrid({ files, guide, guideLoading, currentId, onPick, onChange }
   const [season, setSeason] = useState<string>()
   const [, setTick] = useState(0)
 
-  const items = useMemo(() => files
-    .map((f) => {
-      const ep = guideOf(guide, f)
-      const s = f.season ?? ep?.season
-      return { f, ep, season: s != null ? `Temporada ${s}` : f.episode != null ? 'Episódios' : 'Arquivos' }
+  const items = useMemo(() => {
+    // o mesmo episódio em mais de um arquivo (qualidades diferentes) vira um cartão só, com a escolha da qualidade
+    const byEpisode = new Map<string, LibraryFile[]>()
+    files.forEach((x) => {
+      const k = x.episode == null ? x.id : `${x.season ?? ''}|${x.episode}`
+      byEpisode.set(k, [...(byEpisode.get(k) ?? []), x])
     })
-    // extras sem número (aberturas, encerramentos) ficam por último
-    .sort((a, b) => Number(a.f.episode == null) - Number(b.f.episode == null) || (a.f.season ?? 0) - (b.f.season ?? 0)
-      || (a.f.episode ?? 0) - (b.f.episode ?? 0) || a.f.name.localeCompare(b.f.name)),
-  [files, guide])
+    return [...byEpisode.values()]
+      .map((group) => {
+        const versions = [...group].sort(byQuality)
+        const f = versions[0]
+        const ep = guideOf(guide, f)
+        const s = f.season ?? ep?.season
+        return { f, versions, ep, season: s != null ? `Temporada ${s}` : f.episode != null ? 'Episódios' : 'Arquivos' }
+      })
+      // extras sem número (aberturas, encerramentos) ficam por último
+      .sort((a, b) => Number(a.f.episode == null) - Number(b.f.episode == null) || (a.f.season ?? 0) - (b.f.season ?? 0)
+        || (a.f.episode ?? 0) - (b.f.episode ?? 0) || a.f.name.localeCompare(b.f.name))
+  }, [files, guide])
 
   const seasons = [...new Set(items.map((i) => i.season))]
-  const current = season && seasons.includes(season) ? season : items.find((i) => i.f.id === currentId)?.season ?? seasons[0]
+  const current = season && seasons.includes(season) ? season : items.find((i) => i.versions.some((v) => v.id === currentId))?.season ?? seasons[0]
   const shown = items
     .filter((i) => i.season === current || (q && seasons.length > 1))
     .filter((i) => !q || String(i.f.episode ?? '').startsWith(q.trim()) || (i.ep?.name ?? i.f.name).toLowerCase().includes(q.trim().toLowerCase()))
@@ -77,11 +87,13 @@ function EpisodeGrid({ files, guide, guideLoading, currentId, onPick, onChange }
 
       {guideLoading && <p className="mb-3 text-xs text-zinc-500">Carregando capas dos episódios…</p>}
       <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-        {shown.map(({ f, ep }, n) => {
+        {shown.map(({ f: best, versions, ep }, n) => {
+          // versão do cartão: a que está tocando; senão a que o usuário vinha assistindo; senão a de melhor qualidade
+          const f = versions.find((v) => v.id === currentId) ?? preferredVersion(versions)
           const p = progressOf(f.id)
           const playing = f.id === currentId
           return (
-            <motion.div key={f.id} className="group" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(n, 15) * 0.02 }}>
+            <motion.div key={best.id} className="group" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(n, 15) * 0.02 }}>
               <Link to={`/watch/${f.id}`} onClick={onPick} aria-current={playing ? 'true' : undefined}
                 className={`relative block aspect-video overflow-hidden rounded-xl bg-surface2 transition group-hover:ring-accent-500/70 ${playing ? 'ring-2 ring-accent-500' : p.done ? 'ring-1 ring-emerald-500/50' : 'ring-1 ring-white/5'}`}>
                 {ep?.stillUrl ? <img src={ep.stillUrl} alt="" loading="lazy" className={`h-full w-full object-cover transition duration-300 group-hover:scale-105 ${p.done && !playing ? 'opacity-50' : ''}`} />
@@ -94,6 +106,7 @@ function EpisodeGrid({ files, guide, guideLoading, currentId, onPick, onChange }
                     <span className="grid h-11 w-11 place-items-center rounded-full bg-accent-600 shadow-lg"><Play size={18} fill="white" className="ml-0.5" /></span>
                   </span>
                 )}
+                {f.quality && <span className="absolute bottom-2 right-2 rounded-md bg-black/75 px-1.5 py-0.5 text-[10px] font-bold backdrop-blur">{f.quality}</span>}
                 {p.ratio > 0 && !p.done && <div className="absolute inset-x-0 bottom-0"><Bar percent={p.ratio * 100} /></div>}
               </Link>
               <div className="mt-2 flex items-start gap-2">
@@ -105,6 +118,18 @@ function EpisodeGrid({ files, guide, guideLoading, currentId, onPick, onChange }
                   {p.done ? <CheckCircle2 size={18} /> : <Circle size={18} />}
                 </button>
               </div>
+              {versions.length > 1 && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5" role="group" aria-label="Qualidade">
+                  {versions.map((v) => (
+                    <Link key={v.id} to={`/watch/${v.id}`} replace={playing} onClick={() => { onPick?.(); carryProgress(f, v) }}
+                      title={v.id === f.id ? `Qualidade selecionada: ${versionLabel(v, versions, true)}` : `Assistir em ${versionLabel(v, versions, true)}`}
+                      aria-current={v.id === f.id ? 'true' : undefined}
+                      className={`rounded-md border px-1.5 py-0.5 text-[11px] font-bold transition ${v.id === f.id ? 'border-accent-500 bg-accent-600/20 text-accent-400' : 'border-line text-zinc-400 hover:border-accent-500/60 hover:text-white'}`}>
+                      {versionLabel(v, versions)}
+                    </Link>
+                  ))}
+                </div>
+              )}
               {p.ratio > 0 && !p.done && !playing && <div className="text-[11px] text-zinc-500">Parou em {Math.round(p.ratio * 100)}%</div>}
             </motion.div>
           )

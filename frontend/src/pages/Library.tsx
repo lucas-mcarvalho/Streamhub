@@ -5,6 +5,8 @@ import { CheckCircle2, ExternalLink, Film, HardDrive, LayoutGrid, Play, Search, 
 import { api, fmtBytes, genrePt, progressOf, type CatalogItem, type GuideEpisode, type LibraryFile } from '../api'
 import ContinueRow from '../components/ContinueRow'
 import { useProgressSync } from '../lib/progress'
+import { qualitiesOf } from '../lib/versions'
+import { fmtTime, resumeLabel, resumeOf } from '../lib/resume'
 import { useToast } from '../components/Toast'
 import { Bar, Chip, PageTitle, PosterSkeleton, Score, Spinner } from '../components/ui'
 import { useAsync } from '../hooks'
@@ -35,6 +37,7 @@ function LibraryCard({ g, meta, index, onOpen, onDelete }: { g: Group; meta: Met
   const anime = meta?.kind === 'ANIME' || g.kind === 'ANIME'
   const watched = g.files.filter((f) => progressOf(f.id).done).length
   const genres = (meta?.genres ?? []).map((x) => (anime ? genrePt(x) : x)).slice(0, 2)
+  const resume = resumeOf(g.files)
   return (
     <motion.div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() } }}
       className="group w-full cursor-pointer text-left" initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }}
@@ -44,8 +47,15 @@ function LibraryCard({ g, meta, index, onOpen, onDelete }: { g: Group; meta: Met
           : <div className="grid h-full place-items-center bg-gradient-to-br from-accent-700/40 to-surface2 p-4 text-center"><Film size={32} className="mb-2 text-accent-400" />{meta === undefined ? '' : g.name}</div>}
         <div className="absolute left-2 top-2"><Score value={meta?.rating} /></div>
         <span className="absolute right-2 top-2 rounded-full bg-black/70 px-2 py-0.5 text-[11px] font-bold backdrop-blur">{g.files.length} {g.files.length > 1 ? 'eps' : 'arquivo'}</span>
-        <div className="absolute inset-0 grid place-items-center bg-black/50 opacity-0 transition group-hover:opacity-100">
-          <span className="grid h-14 w-14 place-items-center rounded-full bg-accent-600 shadow-xl"><Play size={24} fill="white" /></span>
+        {/* com mouse, o botão do meio já toca de onde parou; no toque, o cartão abre os detalhes, que têm o mesmo botão */}
+        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/50 opacity-0 transition group-hover:opacity-100">
+          {resume ? (
+            <Link to={`/watch/${resume.file.id}`} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()} title={resumeLabel(resume)} aria-label={resumeLabel(resume)}
+              className="flex flex-col items-center gap-2 [@media(hover:hover)]:pointer-events-auto">
+              <span className="grid h-14 w-14 place-items-center rounded-full bg-accent-600 shadow-xl transition hover:scale-110 hover:bg-accent-500"><Play size={24} fill="white" /></span>
+              <span className="rounded-full bg-black/70 px-2.5 py-0.5 text-[11px] font-bold backdrop-blur">{resumeLabel(resume)}</span>
+            </Link>
+          ) : <span className="grid h-14 w-14 place-items-center rounded-full bg-accent-600 shadow-xl"><Play size={24} fill="white" /></span>}
         </div>
         {watched > 0 && <span className="absolute bottom-2 left-2 flex items-center gap-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[11px] font-bold text-black"><CheckCircle2 size={12} />{watched}/{g.files.length}</span>}
         <button title="Apagar do disco" onClick={(e) => { e.stopPropagation(); onDelete() }}
@@ -79,6 +89,7 @@ function Detail({ g, meta, onClose, onChanged }: { g: Group; meta: Meta; onClose
   const episodes = g.files.filter((f) => f.episode != null)
   const counted = episodes.length > 1 ? episodes : g.files
   const watched = counted.filter((f) => progressOf(f.id).done).length
+  const resume = resumeOf(g.files)
   const overall = counted.reduce((sum, f) => { const p = progressOf(f.id); return sum + (p.done ? 1 : p.ratio) }, 0) / counted.length
   return (
     <motion.div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm sm:p-6" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
@@ -92,16 +103,22 @@ function Detail({ g, meta, onClose, onChanged }: { g: Group; meta: Meta; onClose
           <button onClick={onClose} className="absolute right-4 top-4 rounded-full bg-black/60 p-2 backdrop-blur transition hover:bg-accent-600"><X size={18} /></button>
           <div className="absolute bottom-4 left-6 right-6">
             <h2 className="font-display text-4xl font-bold tracking-wide">{meta?.title ?? g.name}</h2>
-            <div className="mt-2 flex flex-wrap items-center gap-2"><Score value={meta?.rating} big />{genres.slice(0, 4).map((x) => <Chip key={x}>{x}</Chip>)}</div>
+            <div className="mt-2 flex flex-wrap items-center gap-2"><Score value={meta?.rating} big />{genres.slice(0, 4).map((x) => <Chip key={x}>{x}</Chip>)}
+              {qualitiesOf(g.files).map((x) => <span key={x} title="Qualidade dos arquivos" className="rounded-md border border-white/40 bg-black/40 px-2 py-0.5 text-xs font-bold backdrop-blur">{x}</span>)}</div>
           </div>
         </div>
         <div className="px-6 pb-10">
           {meta?.overview && <p className="mb-5 line-clamp-4 text-sm leading-relaxed text-zinc-300">{meta.overview}</p>}
           <div className="mb-6 flex flex-wrap gap-3">
-            {g.files.some((f) => f.episode != null) && <Link to={`/episodes/${g.kind}/${encodeURIComponent(g.name)}`} className="inline-flex items-center gap-2 rounded-lg bg-accent-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-500"><LayoutGrid size={14} />Ver episódios</Link>}
+            {resume && (
+              <Link to={`/watch/${resume.file.id}`} className="inline-flex items-center gap-2 rounded-lg bg-accent-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-accent-500">
+                <Play size={14} fill="white" />{resumeLabel(resume)}{resume.mode === 'continue' && <span className="font-normal tabular-nums opacity-80">· {fmtTime(resume.pos)}</span>}
+              </Link>
+            )}
+            {g.files.some((f) => f.episode != null) && <Link to={`/episodes/${g.kind}/${encodeURIComponent(g.name)}`} className="inline-flex items-center gap-2 rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent-500/60"><LayoutGrid size={14} />Ver episódios</Link>}
             {meta && <Link to={`/title/${meta.source}/${meta.type}/${meta.id}`} className="inline-flex items-center gap-2 rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent-500/60"><ExternalLink size={14} />Página do título</Link>}
             <button onClick={() => remove(g.files.map((f) => f.id), `todos os ${g.files.length} arquivo(s)`)} className="inline-flex items-center gap-2 rounded-lg border border-line px-3 py-1.5 text-sm text-zinc-400 hover:border-red-500/60 hover:text-red-400"><Trash2 size={14} />Apagar tudo</button>
-            <span className="ml-auto self-center text-xs text-zinc-500">{g.files.length} arquivo(s) · {fmtBytes(g.size)}</span>
+            <span className="ml-auto self-center text-xs text-zinc-500">{[`${g.files.length} arquivo(s)`, fmtBytes(g.size), qualitiesOf(g.files).join(' / ')].filter(Boolean).join(' · ')}</span>
           </div>
           {counted.length > 1 && (
             <div className="mb-6">
@@ -134,6 +151,7 @@ function Detail({ g, meta, onClose, onChanged }: { g: Group; meta: Meta; onClose
                         <div className="flex items-baseline gap-2">
                           {f.episode != null && <span className="shrink-0 text-sm font-semibold tabular-nums text-zinc-500">{f.episode}</span>}
                           <Link to={`/watch/${f.id}`} className="line-clamp-2 text-sm font-semibold leading-snug hover:text-accent-400 sm:truncate sm:text-base">{ep?.name ?? (f.episode != null ? `Episódio ${f.episode}` : f.name)}</Link>
+                          {f.quality && <span title="Qualidade" className="shrink-0 self-center rounded border border-line px-1.5 py-px text-[10px] font-bold text-zinc-300">{f.quality}</span>}
                           {p.done && <CheckCircle2 size={14} className="shrink-0 self-center text-emerald-400" />}
                           {ep?.runtime ? <span className="ml-auto hidden shrink-0 text-xs text-zinc-500 sm:inline">{ep.runtime} min</span> : null}
                         </div>

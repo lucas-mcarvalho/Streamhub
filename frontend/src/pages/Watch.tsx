@@ -7,6 +7,7 @@ import EpisodeGrid, { guideOf } from '../components/EpisodeGrid'
 import { parseVtt, subtitleAt, transcodeStart, type Cue } from '../lib/subtitles'
 import { attachStream, mseSupported } from '../lib/mseStream'
 import { saveProgress, syncProgress } from '../lib/progress'
+import { sameEpisode, versionLabel, versionsOf } from '../lib/versions'
 import JASSUB from 'jassub'
 
 const LANGS: Record<string, string> = {
@@ -20,7 +21,7 @@ const subLabel = (s: SubTrack) =>
 
 const ctl = 'grid h-9 w-9 shrink-0 sm:h-10 sm:w-10 place-items-center rounded-full text-white transition hover:bg-white/15 active:bg-white/25'
 
-function MenuGroup({ items, onPick }: { items: { key: number; label: string; on: boolean; disabled?: boolean }[]; onPick: (k: number) => void }) {
+function MenuGroup<K extends number | string>({ items, onPick }: { items: { key: K; label: string; on: boolean; disabled?: boolean }[]; onPick: (k: K) => void }) {
   return (
     <div>
       {items.map((i) => (
@@ -134,7 +135,7 @@ export default function Watch() {
   const stallSince = useRef<number | null>(null)
   const healthySince = useRef<number | null>(null)
   const retries = useRef(0)
-  const [tab, setTab] = useState<'audio' | 'sub' | 'rate' | 'skip'>('sub')
+  const [tab, setTab] = useState<'audio' | 'sub' | 'quality' | 'rate' | 'skip'>('sub')
   const [fs, setFs] = useState(false)
   const [fake, setFake] = useState(false)
   const [flash, setFlash] = useState<{ side: number; n: number }>()
@@ -165,14 +166,22 @@ export default function Watch() {
   const guideName = (f?: LibraryFile) => guideOf(guide, f)?.name
   const episodeTitle = guideName(file)
   const episodeLabel = file?.season != null ? `T${file.season} · Episódio ${file.episode}` : file?.episode != null ? `Episódio ${file.episode}` : ''
-  const next = useMemo(() => {
+  // o mesmo episódio em outros arquivos (outras qualidades), para o seletor de qualidade
+  const versions = useMemo(() => (file ? versionsOf(files, file) : []), [files, file])
+  const quality = file?.quality ?? info?.quality ?? undefined
+  // vizinho na lista que seja outro episódio (não outra versão deste), de preferência na mesma qualidade
+  const neighbour = (step: 1 | -1) => {
     const i = files.findIndex((f) => f.id === id)
-    return i >= 0 && files[i + 1]?.group === files[i].group ? files[i + 1] : undefined
-  }, [files, id])
-  const prev = useMemo(() => {
-    const i = files.findIndex((f) => f.id === id)
-    return i > 0 && files[i - 1].group === files[i].group ? files[i - 1] : undefined
-  }, [files, id])
+    if (i < 0) return undefined
+    for (let j = i + step; files[j]?.group === files[i].group; j += step) {
+      if (sameEpisode(files[j], files[i])) continue
+      const options = versionsOf(files, files[j])
+      return options.find((v) => v.quality === files[i].quality) ?? options[0]
+    }
+    return undefined
+  }
+  const next = useMemo(() => neighbour(1), [files, id]) // eslint-disable-line react-hooks/exhaustive-deps
+  const prev = useMemo(() => neighbour(-1), [files, id]) // eslint-disable-line react-hooks/exhaustive-deps
   // "Episódio 10 — Nome", para os botões de próximo episódio dizerem o que vem a seguir
   const nextName = guideName(next)
   const nextLabel = !next ? '' : next.episode == null ? next.name
@@ -193,6 +202,13 @@ export default function Watch() {
   const persistRef = useRef(persist)
   persistRef.current = persist
   const goTo = (f: LibraryFile) => { persist(); nav('/watch/' + f.id) }
+  // troca de qualidade: abre o outro arquivo do mesmo episódio no ponto em que este está
+  const changeQuality = (f: LibraryFile) => {
+    if (f.id === id) return
+    persist()
+    if (duration > 0 && abs > 0) saveProgress(f.id, { pos: abs, dur: duration })
+    nav('/watch/' + f.id, { replace: true })
+  }
 
   // lista de episódios do título, abaixo do player
   const series = useMemo(() => (file ? files.filter((f) => f.group === file.group && f.kind === file.kind) : []), [files, file?.group, file?.kind]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -529,6 +545,7 @@ export default function Watch() {
   const tabs = [
     ...(info && info.audio.length > 1 ? [{ id: 'audio' as const, label: 'Áudio' }] : []),
     ...(info && info.subtitles.length > 0 ? [{ id: 'sub' as const, label: 'Legenda' }] : []),
+    ...(versions.length > 1 ? [{ id: 'quality' as const, label: 'Qualidade' }] : []),
     { id: 'rate' as const, label: 'Velocidade' },
     ...(info?.skips?.some((s) => s.kind === 'intro' || s.kind === 'recap') ? [{ id: 'skip' as const, label: 'Abertura' }] : []),
   ]
@@ -539,7 +556,7 @@ export default function Watch() {
     <div>
       <div className="mb-2 flex items-center justify-between text-sm">
         <Link to="/library" className="flex items-center gap-1 text-zinc-400 hover:text-white"><ArrowLeft size={16} />Biblioteca</Link>
-        <span className="line-clamp-2 pl-4 text-right text-zinc-300 sm:truncate">{file?.group}{episodeLabel && ` · ${episodeLabel}`}{episodeTitle && <span className="text-zinc-400"> — {episodeTitle}</span>}</span>
+        <span className="line-clamp-2 pl-4 text-right text-zinc-300 sm:truncate">{file?.group}{episodeLabel && ` · ${episodeLabel}`}{episodeTitle && <span className="text-zinc-400"> — {episodeTitle}</span>}{quality && <span title="Qualidade do vídeo" className="ml-2 rounded border border-line px-1.5 py-px align-middle text-[11px] font-bold text-zinc-300">{quality}</span>}</span>
       </div>
       <div ref={box} onPointerMove={(e) => { if (e.pointerType === 'mouse') poke() }} onMouseLeave={() => !touch && playing && !menu && setShowUi(false)}
         className={`overflow-hidden bg-black ${fake ? 'fixed inset-0 z-[100] h-[100dvh] w-screen' : fs ? 'h-full w-full' : 'relative mx-auto aspect-video max-h-[calc(100dvh-5.5rem)] w-full rounded-lg'} ${uiVisible ? '' : 'cursor-none'}`}>
@@ -590,7 +607,7 @@ export default function Watch() {
         )}
         {file && (
           <div className={`pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/80 to-transparent px-4 pb-10 pt-3 transition-opacity sm:block sm:px-6 ${expanded ? '' : 'hidden'} ${uiVisible ? 'opacity-100' : 'opacity-0'}`} style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}>
-            <div className="truncate text-xs font-medium text-zinc-300 sm:text-sm">{file.group}</div>
+            <div className="truncate text-xs font-medium text-zinc-300 sm:text-sm">{file.group}{quality && ` · ${quality}`}</div>
             <div className="truncate text-base font-semibold text-white [text-shadow:0_1px_3px_#000] sm:text-xl">
               {episodeLabel ? <><span className="text-accent-400">{episodeLabel}</span>{episodeTitle && ` — ${episodeTitle}`}</> : file.name}
             </div>
@@ -598,7 +615,7 @@ export default function Watch() {
         )}
         {menu && info && (
           <div className="absolute bottom-24 right-2 top-2 z-10 flex w-72 max-w-[calc(100%-1rem)] flex-col rounded-xl border border-white/10 bg-zinc-900/95 p-1.5 text-sm shadow-2xl backdrop-blur">
-            <div className="mb-1 flex shrink-0 gap-1">
+            <div className="mb-1 flex shrink-0 flex-wrap gap-1">
               {tabs.map((t) => (
                 <button key={t.id} onClick={() => setTab(t.id)} className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-semibold transition ${activeTab === t.id ? 'bg-accent-600 text-white' : 'text-zinc-300 hover:bg-white/10'}`}>{t.label}</button>
               ))}
@@ -619,6 +636,10 @@ export default function Watch() {
                   <button className="text-xs text-accent-400 hover:underline" onClick={() => changeSubtitleDelay(0)}>Restaurar sincronização</button>
                   <p className="text-xs text-zinc-400">Se a fala antiga continua na tela, use Adiantar. Ajuste salvo para este episódio.</p>
                 </div>}
+              </>}
+              {activeTab === 'quality' && <>
+                <MenuGroup items={versions.map((v) => ({ key: v.id, label: versionLabel(v, versions, true), on: v.id === id }))} onPick={(k) => { const v = versions.find((x) => x.id === k); setMenu(false); if (v) changeQuality(v) }} />
+                <p className="mt-2 border-t border-white/10 px-3 py-3 text-xs text-zinc-400">Este episódio está na biblioteca em mais de uma qualidade. A troca continua do ponto atual.</p>
               </>}
               {activeTab === 'rate' && <MenuGroup items={[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => ({ key: r, label: r === 1 ? 'Normal' : r + 'x', on: r === rate }))} onPick={(k) => { setRate(Number(k)); setMenu(false) }} />}
               {activeTab === 'skip' && <>
@@ -667,7 +688,8 @@ export default function Watch() {
               {file && file.episode != null && <Link to={`/episodes/${file.kind}/${encodeURIComponent(file.group)}`} title="Lista de episódios" aria-label="Lista de episódios" className="flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3"><LayoutGrid size={16} /><span className="hidden sm:inline">Episódios</span></Link>}
               {prev && <button onClick={() => goTo(prev)} title="Episódio anterior" aria-label="Episódio anterior" className="flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3"><SkipBack size={16} /><span className="hidden sm:inline">Anterior</span></button>}
               {next && <button onClick={() => goTo(next)} onMouseEnter={() => setNextHover('bar')} onMouseLeave={() => setNextHover(undefined)} aria-label={`Próximo episódio: ${nextLabel}`} className="relative flex h-9 min-w-0 shrink items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3">{nextHover === 'bar' && nextPreview}<span className="hidden min-w-0 sm:inline"><span className="block leading-tight">Próximo</span>{next.episode != null && <span className="hidden max-w-[14rem] truncate text-[11px] font-normal leading-tight text-zinc-300 lg:block">{nextLabel}</span>}</span><SkipForward size={16} className="shrink-0" /></button>}
-              <button onClick={() => { setMenu((m) => !m); setVolOpen(false) }} className={ctl} title="Áudio, legenda e velocidade" aria-label="Configurações"><Settings size={20} /></button>
+              {versions.length > 1 && <button onClick={() => { setTab('quality'); setMenu((m) => !(m && activeTab === 'quality')); setVolOpen(false) }} title="Trocar a qualidade" aria-label={`Qualidade: ${quality ?? 'desconhecida'}. Trocar`} className="hidden h-9 shrink-0 items-center rounded-full border border-white/30 px-2.5 text-xs font-bold hover:bg-white/15 active:bg-white/25 sm:flex">{quality ?? 'Qualidade'}</button>}
+              <button onClick={() => { setMenu((m) => !m); setVolOpen(false) }} className={ctl} title="Áudio, legenda, qualidade e velocidade" aria-label="Configurações"><Settings size={20} /></button>
               <button onClick={fullscreen} className={ctl} title="Tela cheia (f)" aria-label="Tela cheia">{expanded ? <Minimize size={20} /> : <Maximize size={20} />}</button>
             </span>
           </div>

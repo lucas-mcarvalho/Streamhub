@@ -33,6 +33,8 @@ export type Download = {
 export type LibraryFile = {
   id: string; name: string; group: string; kind: string; sizeBytes: number; season?: number; episode?: number
   location: string; relativePath: string; modified: string
+  /** Resolução do vídeo ("1080p", "4K"…), quando conhecida. */
+  quality?: string | null
 }
 export type Indexer = { id: number; name: string; enabled: boolean; protocol: string; privacy: string; implementation: string; failing: boolean }
 export type Integration = {
@@ -93,7 +95,7 @@ export type AudioTrack = { index: number; codec?: string; language?: string; tit
 export type SubTrack = { index: number; codec?: string; language?: string; title?: string; textBased: boolean }
 /** Trecho marcado nos capítulos do arquivo que o player oferece pular. */
 export type SkipSegment = { kind: 'intro' | 'recap' | 'credits' | 'preview'; start: number; end: number }
-export type MediaInfo = { duration: number; videoCodec?: string; directPlay: boolean; audio: AudioTrack[]; subtitles: SubTrack[]; skips?: SkipSegment[]; fonts?: number }
+export type MediaInfo = { duration: number; videoCodec?: string; directPlay: boolean; audio: AudioTrack[]; subtitles: SubTrack[]; skips?: SkipSegment[]; fonts?: number; quality?: string | null }
 
 const STATUS: Record<string, string> = {
   FINISHED: 'Finalizado', RELEASING: 'Em exibição', NOT_YET_RELEASED: 'Em breve', CANCELLED: 'Cancelado', HIATUS: 'Em hiato',

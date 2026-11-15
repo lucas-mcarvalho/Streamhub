@@ -21,4 +21,14 @@ class LibraryOrderTest {
         assertEquals(0, LibraryService.naturalCompare("a1", "A1"));
         assertTrue(LibraryService.naturalCompare("ED 03.mkv", "ED 10.mkv") < 0);
     }
+
+    @Test
+    void qualityLabelUsesWidthForWidescreenVideo() {
+        assertEquals("1080p", LibraryService.qualityLabel(1920, 1080));
+        assertEquals("1080p", LibraryService.qualityLabel(1920, 804));
+        assertEquals("720p", LibraryService.qualityLabel(1280, 720));
+        assertEquals("4K", LibraryService.qualityLabel(3840, 1600));
+        assertEquals("480p", LibraryService.qualityLabel(854, 480));
+        assertEquals(null, LibraryService.qualityLabel(0, 0));
+    }
 }

@@ -49,7 +49,26 @@ public class LibraryService {
     public record SkipSegment(String kind, double start, double end) {}
 
     public record MediaInfo(double duration, String videoCodec, String pixFmt, boolean directPlay,
-                            List<AudioTrack> audio, List<SubTrack> subtitles, List<SkipSegment> skips, int fonts) {}
+                            List<AudioTrack> audio, List<SubTrack> subtitles, List<SkipSegment> skips, int fonts, String quality) {}
+
+    /** Nome da resolução pelo tamanho real da imagem; a largura conta porque filmes em tela larga têm menos linhas. */
+    static String qualityLabel(int width, int height) {
+        if (width <= 0 && height <= 0) return null;
+        if (width >= 3800 || height >= 2000) return "4K";
+        if (width >= 2500 || height >= 1400) return "1440p";
+        if (width >= 1900 || height >= 1000) return "1080p";
+        if (width >= 1260 || height >= 700) return "720p";
+        if (width >= 840 || height >= 460) return "480p";
+        return Math.max(height, 0) + "p";
+    }
+
+    /** Resolução indicada no nome do arquivo; sem ela, a real, se o arquivo já foi analisado. */
+    private String qualityOf(Path p, String fileName, long modifiedMillis) {
+        String q = com.streamhub.search.ReleaseParser.resolution(fileName);
+        if (!"?".equals(q)) return q;
+        MediaInfo cached = infoCache.get(p + "|" + modifiedMillis);
+        return cached == null ? null : cached.quality();
+    }
 
     record Chapter(String title, double start, double end) {}
 
@@ -150,8 +169,9 @@ public class LibraryService {
                         }
                     }
                     try {
+                        java.nio.file.attribute.FileTime modified = Files.getLastModifiedTime(p);
                         out.add(new LibraryFile(encodeId(loc.getId(), rel), fileName, group, loc.getKind(), Files.size(p),
-                            Files.getLastModifiedTime(p).toInstant(), season, ep, loc.getName(), rel));
+                            modified.toInstant(), season, ep, loc.getName(), rel, qualityOf(p, fileName, modified.toMillis())));
                     } catch (IOException ignored) {
                         // arquivo sumiu durante a varredura
                     }
@@ -239,11 +259,12 @@ public class LibraryService {
         if (cached != null) return cached;
         try {
             String output = run(30, "ffprobe", "-v", "error", "-show_entries",
-                "stream=codec_type,codec_name,pix_fmt,channels:stream_tags=language,title,mimetype,filename:format=duration"
+                "stream=codec_type,codec_name,pix_fmt,channels,width,height:stream_tags=language,title,mimetype,filename:format=duration"
                     + ":chapter=start_time,end_time:chapter_tags=title",
                 "-of", "compact=p=0", p.toString());
             double duration = 0;
             String vcodec = null, pix = null;
+            int width = 0, height = 0;
             List<AudioTrack> audio = new ArrayList<>();
             List<SubTrack> subs = new ArrayList<>();
             List<Chapter> chapters = new ArrayList<>();
@@ -264,6 +285,10 @@ public class LibraryService {
                 } else if ("video".equals(type) && vcodec == null) {
                     vcodec = kv.get("codec_name");
                     pix = kv.get("pix_fmt");
+                    try {
+                        width = Integer.parseInt(kv.getOrDefault("width", "0"));
+                        height = Integer.parseInt(kv.getOrDefault("height", "0"));
+                    } catch (NumberFormatException ignored) { }
                 } else if ("audio".equals(type)) {
                     int ch = 2;
                     try { ch = Integer.parseInt(kv.getOrDefault("channels", "2")); } catch (NumberFormatException ignored) { }
@@ -280,7 +305,7 @@ public class LibraryService {
                 && vcodec != null && Set.of("h264", "vp8", "vp9", "av1").contains(vcodec)
                 && "yuv420p".equals(pix)
                 && (audio.isEmpty() || Set.of("aac", "mp3", "opus", "vorbis", "flac").contains(audio.get(0).codec()));
-            MediaInfo info = new MediaInfo(duration, vcodec, pix, directPlay, audio, subs, skipsFromChapters(chapters), fonts);
+            MediaInfo info = new MediaInfo(duration, vcodec, pix, directPlay, audio, subs, skipsFromChapters(chapters), fonts, qualityLabel(width, height));
             infoCache.put(key, info);
             return info;
         } catch (IOException e) {
