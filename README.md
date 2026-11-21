@@ -128,6 +128,15 @@ Acesse **http://localhost:5173** e entre com `APP_ADMIN_USER` / `APP_ADMIN_PASSW
 3. Em **Armazenamento**, confira as pastas de destino. Na primeira execução, o backend registra sozinho as pastas `Animes`, `Series`/`Séries` e `Filmes`/`Movies` encontradas até dois níveis abaixo de `/media`, `/hd1` e `/disks`.
 4. Abra um título, use **Buscar downloads** e clique em **Baixar**.
 
+## App para Android TV
+
+O app em `android-tv/` mostra a mesma interface na TV, adaptada ao controle remoto. O servidor continua sendo o PC: o app só encontra o StreamHub na rede e o abre.
+
+- **Instalar:** compile com `cd android-tv && ./gradlew assembleRelease` (gera `app/build/outputs/apk/release/app-release.apk`), copie para um pendrive e instale na TV por um gerenciador de arquivos (permita "fontes desconhecidas").
+- **Conexão:** na primeira vez, o app varre a rede da TV procurando a porta 5173 e confirma em `/api/system/status`. O endereço fica salvo; se o IP do PC mudar, ele procura de novo sozinho. Também dá para digitar o IP. Para trocar de servidor, use o botão **Menu** do controle ou **Configurações > Trocar servidor**.
+- **Controle remoto:** as setas andam entre os itens, **OK** abre e **Voltar** volta uma tela. No player, com os controles escondidos: ←/→ = ±10 s, OK = pausar, ↑/↓ = mostrar os controles; as teclas de mídia do controle também funcionam.
+- O login fica salvo na TV. Para testar o modo TV no navegador do PC, abra `http://localhost:5173/?tv=1` (e `?tv=0` para desligar).
+
 ## Configuração
 
 Todas as variáveis ficam no arquivo `.env` (modelo em `.env.example`).
