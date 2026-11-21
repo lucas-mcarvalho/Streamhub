@@ -1,3 +1,5 @@
+import { isTV } from './lib/tv'
+
 export type CatalogItem = {
   ref: string; source: string; type: string; id: string; kind: 'MOVIE' | 'SERIES' | 'ANIME'
   title: string; originalTitle?: string; overview?: string; posterUrl?: string; backdropUrl?: string
@@ -42,10 +44,12 @@ export type Integration = {
 }
 
 const KEY = 'streamhub.auth'
+// na TV o login fica salvo (ninguém quer digitar a senha no controle remoto toda vez que abre o app)
+const store = () => (isTV ? localStorage : sessionStorage)
 export const auth = {
-  get: () => sessionStorage.getItem(KEY),
-  set: (user: string, pass: string) => sessionStorage.setItem(KEY, 'Basic ' + btoa(`${user}:${pass}`)),
-  clear: () => sessionStorage.removeItem(KEY),
+  get: () => store().getItem(KEY),
+  set: (user: string, pass: string) => store().setItem(KEY, 'Basic ' + btoa(`${user}:${pass}`)),
+  clear: () => store().removeItem(KEY),
 }
 
 export class ApiError extends Error {

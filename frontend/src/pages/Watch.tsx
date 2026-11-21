@@ -9,6 +9,7 @@ import { attachStream, mseSupported } from '../lib/mseStream'
 import { saveProgress, syncProgress } from '../lib/progress'
 import { sameEpisode, versionLabel, versionsOf } from '../lib/versions'
 import JASSUB from 'jassub'
+import { isTV, keepScreenOn, onBack, setKeyInterceptor } from '../lib/tv'
 
 const LANGS: Record<string, string> = {
   por: 'Português', eng: 'Inglês', jpn: 'Japonês', spa: 'Espanhol', fre: 'Francês', ger: 'Alemão', ita: 'Italiano',
@@ -40,7 +41,7 @@ function fmt(t: number) {
   return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0')
 }
 
-const coarse = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
+const coarse = () => !isTV && typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
 
 type Storyboard = { url: string; interval: number; cols: number; count: number; w: number; h: number }
 const SEGMENT_NAMES: Record<SkipSegment['kind'], string> = { intro: 'Abertura', recap: 'Recapitulação', credits: 'Encerramento', preview: 'Prévia' }
@@ -102,6 +103,7 @@ export default function Watch() {
   const video = useRef<HTMLVideoElement>(null)
   const pending = useRef<number | null>(null)
   const hideTimer = useRef<number>()
+  const playBtn = useRef<HTMLButtonElement>(null)
 
   const [info, setInfo] = useState<MediaInfo>()
   const [token, setToken] = useState<string>()
@@ -137,7 +139,7 @@ export default function Watch() {
   const retries = useRef(0)
   const [tab, setTab] = useState<'audio' | 'sub' | 'quality' | 'rate' | 'skip'>('sub')
   const [fs, setFs] = useState(false)
-  const [fake, setFake] = useState(false)
+  const [fake, setFake] = useState(isTV)
   const [flash, setFlash] = useState<{ side: number; n: number }>()
   const menuOpen = useRef(false)
   const tapTimer = useRef<number>()
@@ -491,6 +493,7 @@ export default function Watch() {
 
   // atalhos de teclado
   useEffect(() => {
+    if (isTV) return
     const h = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === 'SELECT' || (e.target as HTMLElement)?.tagName === 'INPUT') return
       if (e.key === ' ' || e.key === 'k') { e.preventDefault(); toggle() }
@@ -513,6 +516,70 @@ export default function Watch() {
     window.clearTimeout(hideTimer.current)
     hideTimer.current = window.setTimeout(() => { if (!menuOpen.current) setShowUi(false) }, 3000)
   }
+
+  // Controle remoto (modo TV). Controles escondidos: ←/→ pulam 10 s, OK pausa, ↑/↓ mostram os controles.
+  // Controles visíveis: as setas andam entre os botões (navegação da TV) e cada tecla segura os controles na tela.
+  const tvKeys = useRef<(e: KeyboardEvent) => boolean>(() => false)
+  tvKeys.current = (e) => {
+    const k = e.key
+    if (k === 'MediaPlayPause' || k === 'MediaPlay' || k === 'MediaPause') {
+      const v = video.current
+      if (v) { if (k === 'MediaPlay') v.play(); else if (k === 'MediaPause') v.pause(); else toggle() }
+      poke(); return true
+    }
+    if (k === 'MediaFastForward') { seek(abs + 30); poke(); return true }
+    if (k === 'MediaRewind') { seek(abs - 30); poke(); return true }
+    if (k === 'MediaTrackNext' && next) { goTo(next); return true }
+    if (k === 'MediaTrackPrevious' && prev) { goTo(prev); return true }
+    if (menu || volOpen) { poke(); return false }
+    const hidden = playing && !showUi
+    const arrow = k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown'
+    if (hidden) {
+      if (k === 'ArrowLeft' || k === 'ArrowRight') {
+        const side = k === 'ArrowLeft' ? -1 : 1
+        const now = Date.now()
+        seek(abs + side * 10); setFlash({ side, n: now })
+        window.setTimeout(() => setFlash((f) => (f?.n === now ? undefined : f)), 600)
+        return true
+      }
+      if (k === 'Enter' || k === ' ') { toggle(); poke(); return true }
+      if (arrow) {
+        poke()
+        if (skip) (document.querySelector('[data-skip-btn]') as HTMLElement | null)?.focus()
+        else playBtn.current?.focus()
+        return true
+      }
+      return false
+    }
+    // barra de tempo focada: ←/→ andam 10 s (o padrão do controle deslizante seria 1 s)
+    const a = document.activeElement as HTMLInputElement | null
+    if (a?.classList.contains('seek') && (k === 'ArrowLeft' || k === 'ArrowRight')) { seek(abs + (k === 'ArrowLeft' ? -10 : 10)); poke(); return true }
+    // nada focado dentro do player: OK pausa/continua
+    if ((k === 'Enter' || k === ' ') && (!a || a === document.body || a.tagName === 'VIDEO')) { toggle(); poke(); return true }
+    if (arrow && (!a || a === document.body || !box.current?.contains(a))) { poke(); playBtn.current?.focus(); return true }
+    poke()
+    return false
+  }
+  useEffect(() => {
+    if (!isTV) return
+    setKeyInterceptor((e) => tvKeys.current(e))
+    // voltar: fecha o menu; depois esconde os controles; depois sai do player
+    const off = onBack(() => {
+      if (menu || volOpen) { setMenu(false); setVolOpen(false); playBtn.current?.focus(); return true }
+      if (playing && showUi) { window.clearTimeout(hideTimer.current); setShowUi(false); (document.activeElement as HTMLElement | null)?.blur(); return true }
+      return false
+    })
+    return () => { setKeyInterceptor(null); off() }
+  }, [menu, volOpen, playing, showUi])
+  // tela da TV não apaga enquanto o vídeo toca
+  useEffect(() => { if (isTV) keepScreenOn(playing) }, [playing])
+  useEffect(() => () => keepScreenOn(false), [])
+  // ao abrir o menu de configurações, o foco vai para a primeira opção
+  useEffect(() => {
+    if (!isTV || !menu) return
+    const t = window.setTimeout(() => (document.querySelector('[data-tv-scope].player-menu button') as HTMLElement | null)?.focus(), 50)
+    return () => window.clearTimeout(t)
+  }, [menu])
 
   // ao trocar de episódio, os controles (com o nome do episódio no topo) aparecem por alguns segundos
   useEffect(() => { poke() }, [id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -558,7 +625,7 @@ export default function Watch() {
         <Link to="/library" className="flex items-center gap-1 text-zinc-400 hover:text-white"><ArrowLeft size={16} />Biblioteca</Link>
         <span className="line-clamp-2 pl-4 text-right text-zinc-300 sm:truncate">{file?.group}{episodeLabel && ` · ${episodeLabel}`}{episodeTitle && <span className="text-zinc-400"> — {episodeTitle}</span>}{quality && <span title="Qualidade do vídeo" className="ml-2 rounded border border-line px-1.5 py-px align-middle text-[11px] font-bold text-zinc-300">{quality}</span>}</span>
       </div>
-      <div ref={box} onPointerMove={(e) => { if (e.pointerType === 'mouse') poke() }} onMouseLeave={() => !touch && playing && !menu && setShowUi(false)}
+      <div ref={box} data-tv-scope={isTV ? '' : undefined} onPointerMove={(e) => { if (e.pointerType === 'mouse') poke() }} onMouseLeave={() => !touch && playing && !menu && setShowUi(false)}
         className={`overflow-hidden bg-black ${fake ? 'fixed inset-0 z-[100] h-[100dvh] w-screen' : fs ? 'h-full w-full' : 'relative mx-auto aspect-video max-h-[calc(100dvh-5.5rem)] w-full rounded-lg'} ${uiVisible ? '' : 'cursor-none'}`}>
         {src && (
           <video key={src + (useMse ? '|mse' : '')} ref={video} src={useMse ? undefined : src} autoPlay playsInline className="h-full w-full" onClick={onTap} onDoubleClick={() => { if (!touch) fullscreen() }}
@@ -594,7 +661,7 @@ export default function Watch() {
           </div>
         )}
         {skip && !menu && !volOpen && (
-          <button onClick={skip.go} title={skip.detail ? undefined : `${skip.label} (s)`}
+          <button data-skip-btn onClick={skip.go} title={skip.detail ? undefined : `${skip.label} (s)`}
             onMouseEnter={() => { if (skip.detail) setNextHover('skip') }} onMouseLeave={() => setNextHover(undefined)}
             className={`absolute right-3 z-10 flex items-center gap-1.5 rounded-md border border-white/40 bg-black/70 px-3 py-1.5 text-xs font-semibold text-white shadow-xl backdrop-blur transition-all hover:bg-white hover:text-black active:scale-95 sm:right-6 sm:gap-2 sm:px-5 sm:py-2.5 sm:text-base ${uiVisible ? 'bottom-[5.5rem] sm:bottom-24' : 'bottom-4 sm:bottom-8'}`}>
             <span className="min-w-0 text-left">
@@ -614,7 +681,7 @@ export default function Watch() {
           </div>
         )}
         {menu && info && (
-          <div className="absolute bottom-24 right-2 top-2 z-10 flex w-72 max-w-[calc(100%-1rem)] flex-col rounded-xl border border-white/10 bg-zinc-900/95 p-1.5 text-sm shadow-2xl backdrop-blur">
+          <div data-tv-scope className="player-menu absolute bottom-24 right-2 top-2 z-10 flex w-72 max-w-[calc(100%-1rem)] flex-col rounded-xl border border-white/10 bg-zinc-900/95 p-1.5 text-sm shadow-2xl backdrop-blur">
             <div className="mb-1 flex shrink-0 flex-wrap gap-1">
               {tabs.map((t) => (
                 <button key={t.id} onClick={() => setTab(t.id)} className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-semibold transition ${activeTab === t.id ? 'bg-accent-600 text-white' : 'text-zinc-300 hover:bg-white/10'}`}>{t.label}</button>
@@ -658,7 +725,7 @@ export default function Watch() {
               className="seek mb-1 h-5 w-full cursor-pointer accent-accent-500" aria-label="Posição" />
           </div>
           <div className="flex min-w-0 items-center gap-0.5 text-sm sm:gap-1">
-            <button onClick={toggle} className={ctl} aria-label="Reproduzir/Pausar">{playing ? <Pause size={22} fill="white" /> : <Play size={22} fill="white" />}</button>
+            <button ref={playBtn} onClick={toggle} className={ctl} aria-label="Reproduzir/Pausar">{playing ? <Pause size={22} fill="white" /> : <Play size={22} fill="white" />}</button>
             <button onClick={() => seek(abs - 10)} className={ctl} title="Voltar 10s (←)" aria-label="Voltar 10 segundos"><RotateCcw size={20} /></button>
             <button onClick={() => seek(abs + 10)} className={ctl} title="Avançar 10s (→)" aria-label="Avançar 10 segundos"><RotateCw size={20} /></button>
             <span className="ml-1 min-w-0 truncate whitespace-nowrap text-xs tabular-nums text-zinc-300 sm:text-sm">{fmt(abs)} / {fmt(duration)}</span>
@@ -690,7 +757,7 @@ export default function Watch() {
               {next && <button onClick={() => goTo(next)} onMouseEnter={() => setNextHover('bar')} onMouseLeave={() => setNextHover(undefined)} aria-label={`Próximo episódio: ${nextLabel}`} className="relative flex h-9 min-w-0 shrink items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3">{nextHover === 'bar' && nextPreview}<span className="hidden min-w-0 sm:inline"><span className="block leading-tight">Próximo</span>{next.episode != null && <span className="hidden max-w-[14rem] truncate text-[11px] font-normal leading-tight text-zinc-300 lg:block">{nextLabel}</span>}</span><SkipForward size={16} className="shrink-0" /></button>}
               {versions.length > 1 && <button onClick={() => { setTab('quality'); setMenu((m) => !(m && activeTab === 'quality')); setVolOpen(false) }} title="Trocar a qualidade" aria-label={`Qualidade: ${quality ?? 'desconhecida'}. Trocar`} className="hidden h-9 shrink-0 items-center rounded-full border border-white/30 px-2.5 text-xs font-bold hover:bg-white/15 active:bg-white/25 sm:flex">{quality ?? 'Qualidade'}</button>}
               <button onClick={() => { setMenu((m) => !m); setVolOpen(false) }} className={ctl} title="Áudio, legenda, qualidade e velocidade" aria-label="Configurações"><Settings size={20} /></button>
-              <button onClick={fullscreen} className={ctl} title="Tela cheia (f)" aria-label="Tela cheia">{expanded ? <Minimize size={20} /> : <Maximize size={20} />}</button>
+              <button onClick={fullscreen} className={ctl + (isTV ? ' tv-hidden' : '')} title="Tela cheia (f)" aria-label="Tela cheia">{expanded ? <Minimize size={20} /> : <Maximize size={20} />}</button>
             </span>
           </div>
         </div>

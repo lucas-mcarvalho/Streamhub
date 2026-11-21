@@ -102,7 +102,7 @@ function EpisodeGrid({ files, guide, guideLoading, currentId, onPick, onChange }
                 {playing ? <span className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-accent-600 px-2 py-0.5 text-[11px] font-bold text-white"><Play size={10} fill="white" />Assistindo</span>
                   : p.done && <span className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[11px] font-bold text-black"><CheckCircle2 size={12} />Assistido</span>}
                 {!playing && (
-                  <span className="absolute inset-0 grid place-items-center bg-black/40 opacity-0 transition group-hover:opacity-100">
+                  <span className="absolute inset-0 grid place-items-center bg-black/40 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
                     <span className="grid h-11 w-11 place-items-center rounded-full bg-accent-600 shadow-lg"><Play size={18} fill="white" className="ml-0.5" /></span>
                   </span>
                 )}

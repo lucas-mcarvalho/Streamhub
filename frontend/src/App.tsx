@@ -16,6 +16,7 @@ import Storage from './pages/Storage'
 import TitlePage from './pages/TitlePage'
 import Watch from './pages/Watch'
 import Episodes from './pages/Episodes'
+import TvNavigator from './components/TvNavigator'
 
 function Login({ onDone }: { onDone: () => void }) {
   const [user, setUser] = useState('admin')
@@ -57,6 +58,7 @@ export default function App() {
     <ToastProvider>
       <DownloadsProvider>
       <BrowserRouter>
+        <TvNavigator />
         <Routes>
           <Route element={<Layout onLogout={() => setLogged(false)} />}>
             {/* tela única: Filmes e Séries, com a aba Animes (?aba=animes) */}

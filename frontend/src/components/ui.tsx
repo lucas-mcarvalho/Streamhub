@@ -1,8 +1,9 @@
-import { useRef, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { AlertTriangle, ChevronLeft, ChevronRight, Loader2, Star, X } from 'lucide-react'
 import { genrePt, type CatalogItem } from '../api'
+import { onBack } from '../lib/tv'
 
 export const btn =
   'inline-flex items-center justify-center gap-2 rounded-lg bg-accent-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-accent-600/25 transition hover:bg-accent-500 active:scale-95 disabled:opacity-50 disabled:active:scale-100'
@@ -12,8 +13,17 @@ export const input =
   'w-full rounded-lg border border-line bg-surface2/60 px-3 py-2 text-sm outline-none transition placeholder:text-zinc-500 focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20'
 
 export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+  const close = useRef(onClose)
+  close.current = onClose
+  // Esc no teclado e voltar no controle remoto fecham a janela
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === 'Escape') close.current() }
+    window.addEventListener('keydown', k)
+    const off = onBack(() => { close.current(); return true })
+    return () => { window.removeEventListener('keydown', k); off() }
+  }, [])
   return (
-    <motion.div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+    <motion.div data-tv-scope role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
       initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={onClose}>
       <motion.div className={`glass max-h-[90vh] w-full overflow-auto rounded-2xl p-6 shadow-2xl ${wide ? 'max-w-3xl' : 'max-w-lg'}`}
         initial={{ opacity: 0, y: 24, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ type: 'spring', damping: 24, stiffness: 300 }}
@@ -61,13 +71,13 @@ export function Card({ item, index = 0, fluid, wide }: { item: CatalogItem; inde
       initial={{ opacity: 0, y: 24 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '40px' }}
       transition={{ delay: Math.min(index % 12, 10) * 0.04, duration: 0.45 }} whileHover={{ scale: 1.06 }}>
       <Link to={`/title/${item.source}/${item.type}/${item.id}`} className="block">
-        <div className="relative aspect-[2/3] overflow-hidden rounded-md bg-surface2 shadow-lg ring-1 ring-white/5 transition duration-300 group-hover:shadow-2xl group-hover:shadow-black/70 group-hover:ring-white/30">
+        <div className="relative aspect-[2/3] overflow-hidden rounded-md bg-surface2 shadow-lg ring-1 ring-white/5 transition duration-300 group-hover:shadow-2xl group-hover:shadow-black/70 group-hover:ring-white/30 group-focus-within:ring-white/30">
           {item.posterUrl
             ? <img src={item.posterUrl} alt={item.title} loading="lazy" className="h-full w-full object-cover" />
             : <div className="flex h-full items-center justify-center p-3 text-center text-xs text-zinc-500">{item.title}</div>}
           <div className="absolute left-2 top-2"><Score value={item.rating} /></div>
           {anime && <span className="absolute right-2 top-2 rounded bg-black/70 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-zinc-200">Anime</span>}
-          <div className="absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/40 to-transparent p-3 opacity-0 transition duration-300 group-hover:opacity-100">
+          <div className="absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/40 to-transparent p-3 opacity-0 transition duration-300 group-hover:opacity-100 group-focus-within:opacity-100">
             <div className="line-clamp-2 text-sm font-bold leading-tight">{item.title}</div>
             <div className="mt-0.5 text-[11px] text-zinc-300">{item.year ?? '—'}{item.episodes ? ` · ${item.episodes} eps` : ''}</div>
             <div className="mt-1.5 flex flex-wrap gap-x-1.5 text-[10px] text-zinc-300">{genres.map((g, n) => <span key={g}>{n ? '• ' : ''}{g}</span>)}</div>
@@ -108,8 +118,8 @@ export function Row({ title, items, error, loading, icon }: { title: string; ite
       <div className="flex items-end justify-between">
         <SectionTitle icon={icon}>{title}</SectionTitle>
         <div className="mb-4 hidden gap-1 opacity-0 transition group-hover/row:opacity-100 md:flex">
-          <button onClick={() => scroll(-1)} className="rounded-full bg-surface2 p-1.5 hover:bg-accent-600"><ChevronLeft size={18} /></button>
-          <button onClick={() => scroll(1)} className="rounded-full bg-surface2 p-1.5 hover:bg-accent-600"><ChevronRight size={18} /></button>
+          <button tabIndex={-1} onClick={() => scroll(-1)} className="rounded-full bg-surface2 p-1.5 hover:bg-accent-600"><ChevronLeft size={18} /></button>
+          <button tabIndex={-1} onClick={() => scroll(1)} className="rounded-full bg-surface2 p-1.5 hover:bg-accent-600"><ChevronRight size={18} /></button>
         </div>
       </div>
       {error ? <Notice text={error} />

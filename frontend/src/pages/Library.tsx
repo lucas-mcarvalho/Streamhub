@@ -48,7 +48,7 @@ function LibraryCard({ g, meta, index, onOpen, onDelete }: { g: Group; meta: Met
         <div className="absolute left-2 top-2"><Score value={meta?.rating} /></div>
         <span className="absolute right-2 top-2 rounded-full bg-black/70 px-2 py-0.5 text-[11px] font-bold backdrop-blur">{g.files.length} {g.files.length > 1 ? 'eps' : 'arquivo'}</span>
         {/* com mouse, o botão do meio já toca de onde parou; no toque, o cartão abre os detalhes, que têm o mesmo botão */}
-        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/50 opacity-0 transition group-hover:opacity-100">
+        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/50 opacity-0 transition group-hover:opacity-100 group-focus:opacity-100">
           {resume ? (
             <Link to={`/watch/${resume.file.id}`} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()} title={resumeLabel(resume)} aria-label={resumeLabel(resume)}
               className="flex flex-col items-center gap-2 [@media(hover:hover)]:pointer-events-auto">
@@ -59,7 +59,7 @@ function LibraryCard({ g, meta, index, onOpen, onDelete }: { g: Group; meta: Met
         </div>
         {watched > 0 && <span className="absolute bottom-2 left-2 flex items-center gap-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[11px] font-bold text-black"><CheckCircle2 size={12} />{watched}/{g.files.length}</span>}
         <button title="Apagar do disco" onClick={(e) => { e.stopPropagation(); onDelete() }}
-          className="absolute bottom-2 right-2 grid h-8 w-8 place-items-center rounded-full bg-black/70 text-zinc-300 opacity-0 backdrop-blur transition hover:bg-red-600 hover:text-white group-hover:opacity-100 max-md:opacity-100"><Trash2 size={15} /></button>
+          className="absolute bottom-2 right-2 grid h-8 w-8 place-items-center rounded-full bg-black/70 text-zinc-300 opacity-0 backdrop-blur transition hover:bg-red-600 hover:text-white focus:opacity-100 group-hover:opacity-100 max-md:opacity-100"><Trash2 size={15} /></button>
       </div>
       <div className="mt-2.5 truncate text-sm font-semibold transition group-hover:text-accent-400">{meta?.title ?? g.name}</div>
       <div className="truncate text-xs text-zinc-400">{[meta?.year, ...genres, fmtBytes(g.size)].filter(Boolean).join(' · ')}</div>
@@ -159,7 +159,7 @@ function Detail({ g, meta, onClose, onChanged }: { g: Group; meta: Meta; onClose
                         <div className="mt-1 truncate text-[11px] text-zinc-600">{ep?.runtime ? <span className="sm:hidden">{ep.runtime} min · </span> : null}{f.name} · {fmtBytes(f.sizeBytes)}</div>
                         {p.ratio > 0 && !p.done && <div className="mt-0.5 text-[11px] text-zinc-500">Parou em {Math.round(p.ratio * 100)}%</div>}
                       </div>
-                      <button title="Apagar arquivo" onClick={() => remove([f.id], `"${f.name}"`)} className="self-start p-1.5 text-zinc-500 opacity-0 transition hover:text-red-400 group-hover:opacity-100 max-md:opacity-100"><Trash2 size={16} /></button>
+                      <button title="Apagar arquivo" onClick={() => remove([f.id], `"${f.name}"`)} className="self-start p-1.5 text-zinc-500 opacity-0 transition hover:text-red-400 focus:opacity-100 group-hover:opacity-100 max-md:opacity-100"><Trash2 size={16} /></button>
                     </motion.li>
                   )
                 })}

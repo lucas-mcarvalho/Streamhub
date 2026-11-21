@@ -8,6 +8,15 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@500;600;700;800&family=Bebas+Neue&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <script>
+      // App de TV: a página é desenhada em 1280 px de largura e ampliada para a tela inteira
+      try {
+        if (/StreamHubTV/i.test(navigator.userAgent) || /[?&]tv=1/.test(location.search) || (localStorage.getItem('streamhub.tv') === '1' && !/[?&]tv=0/.test(location.search))) {
+          document.documentElement.classList.add('tv')
+          if (/StreamHubTV/i.test(navigator.userAgent)) document.querySelector('meta[name=viewport]').setAttribute('content', 'width=1280, user-scalable=no')
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body class="bg-canvas text-zinc-100 antialiased">
     <div id="root"></div>

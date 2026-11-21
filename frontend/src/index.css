@@ -56,3 +56,19 @@ body {
   paint-order: stroke fill;
   text-shadow: 0 0.06em 0.12em rgb(0 0 0 / 0.85), 0 0 0.25em rgb(0 0 0 / 0.5);
 }
+
+/* ---------- Modo TV (app Android TV): foco visível para o controle remoto ---------- */
+html.tv { scroll-behavior: auto; }
+html.tv body { cursor: none; }
+html.tv *:focus { outline: none; }
+html.tv :is(a, button, input, select, textarea, [tabindex]):focus {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 6px rgb(var(--accent) / 0.45);
+}
+/* cartões dentro das fileiras: o contorno fica por dentro para não ser cortado pela rolagem */
+html.tv .group > a:focus, html.tv .group[role='button']:focus { outline-offset: -3px; box-shadow: none; }
+html.tv .group > a:focus img, html.tv .group[role='button']:focus img { transform: scale(1.06); }
+html.tv .no-scrollbar.overflow-x-auto { padding-top: 10px; padding-bottom: 16px; scroll-padding-inline: 48px; }
+html.tv .tv-hidden { display: none !important; }
+html:not(.tv) .tv-only { display: none !important; }

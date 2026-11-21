@@ -52,7 +52,7 @@ export default function ContinueRow({ files }: { files: LibraryFile[] }) {
                   {/* no próximo episódio não há ponto de parada: usa um quadro depois da abertura */}
                   <Frame id={f.id} pos={mode === 'next' ? 300 : pos} />
                   <span className="absolute inset-0 grid place-items-center">
-                    <span className="grid h-12 w-12 place-items-center rounded-full bg-black/55 backdrop-blur transition group-hover:scale-110 group-hover:bg-accent-600"><Play size={22} fill="white" /></span>
+                    <span className="grid h-12 w-12 place-items-center rounded-full bg-black/55 backdrop-blur transition group-hover:scale-110 group-hover:bg-accent-600 group-focus:bg-accent-600"><Play size={22} fill="white" /></span>
                   </span>
                   {mode === 'next'
                     ? <span className="absolute left-2 top-2 rounded-md bg-accent-600 px-1.5 py-0.5 text-[11px] font-bold text-white">Próximo episódio</span>

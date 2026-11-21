@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, type Indexer, type Integration } from '../api'
 import { btn, btnGhost, input, Modal, Notice, PageTitle, Spinner } from '../components/ui'
+import { tvBridge } from '../lib/tv'
 import { useToast } from '../components/Toast'
 import { useAsync } from '../hooks'
 
@@ -130,6 +131,15 @@ export default function Settings() {
   return (
     <div>
       <PageTitle sub="Integrações e indexadores">Configurações</PageTitle>
+      {tvBridge()?.changeServer && (
+        <div className="mb-8 flex flex-wrap items-center gap-3 rounded-xl border border-line bg-surface/60 p-4">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-lg font-semibold">Aparelho de TV</h2>
+            <p className="text-sm text-zinc-400">Conectado ao servidor {tvBridge()?.serverAddress?.() ?? ''}. Troque se o PC mudou de endereço.</p>
+          </div>
+          <button className={btnGhost} onClick={() => tvBridge()?.changeServer?.()}>Trocar servidor</button>
+        </div>
+      )}
       <h2 className="mb-2 text-lg font-semibold">Integrações</h2>
       <p className="mb-3 text-sm text-zinc-400">Credenciais são guardadas cifradas no banco. Chaves do Prowlarr/Sonarr/Radarr são lidas automaticamente do config.xml quando disponível.</p>
       <div className="mb-8 space-y-3">{ints.loading ? <Spinner /> : ints.data?.map((i) => <IntegrationRow key={i.service} it={i} onSaved={ints.reload} />)}</div>

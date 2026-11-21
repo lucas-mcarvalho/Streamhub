@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, ChevronsRight } from 'lucide-react'
 import type { CatalogItem } from '../api'
 import { Card, Notice, PosterSkeleton } from './ui'
+import { isTV } from '../lib/tv'
 
 /** Fileira horizontal de títulos; `ranked` mostra o Top 10 numerado. */
 export default function CatalogRow({ title, items, error, loading, ranked, more }: {
@@ -16,7 +17,7 @@ export default function CatalogRow({ title, items, error, loading, ranked, more 
       <div className="mb-3 flex items-center gap-3">
         <h2 className="text-lg font-bold tracking-tight md:text-2xl">{title}</h2>
         {more && (
-          <Link to={more} className="flex items-center gap-0.5 text-xs font-semibold text-accent-400 opacity-0 transition group-hover/row:opacity-100 max-md:opacity-100">
+          <Link to={more} tabIndex={isTV ? -1 : undefined} className="flex items-center gap-0.5 text-xs font-semibold text-accent-400 opacity-0 transition group-hover/row:opacity-100 max-md:opacity-100">
             Ver tudo<ChevronsRight size={14} />
           </Link>
         )}
@@ -26,7 +27,7 @@ export default function CatalogRow({ title, items, error, loading, ranked, more 
         : shown.length === 0 ? <p className="text-sm text-zinc-500">Nenhum resultado.</p>
         : (
           <div className="relative">
-            <button onClick={() => scroll(-1)} aria-label="Voltar"
+            <button tabIndex={-1} onClick={() => scroll(-1)} aria-label="Voltar"
               className="absolute -left-4 bottom-3 top-1 z-20 hidden w-12 place-items-center bg-gradient-to-r from-canvas/90 to-transparent opacity-0 transition group-hover/row:opacity-100 md:-left-12 md:grid"><ChevronLeft size={34} /></button>
             <div ref={ref} className="no-scrollbar -mx-1 flex snap-x gap-3 overflow-x-auto px-1 pb-3 pt-1">
               {shown.map((it, n) => (
@@ -35,8 +36,15 @@ export default function CatalogRow({ title, items, error, loading, ranked, more 
                   <Card item={it} index={n} />
                 </div>
               ))}
+              {isTV && more && (
+                <div className="group flex shrink-0 snap-start">
+                  <Link to={more} className="flex aspect-[2/3] w-36 flex-col items-center justify-center gap-2 rounded-md bg-surface2/70 text-sm font-semibold text-zinc-200 ring-1 ring-white/10 sm:w-44">
+                    <ChevronsRight size={34} className="text-accent-400" />Ver tudo
+                  </Link>
+                </div>
+              )}
             </div>
-            <button onClick={() => scroll(1)} aria-label="Avançar"
+            <button tabIndex={-1} onClick={() => scroll(1)} aria-label="Avançar"
               className="absolute -right-4 bottom-3 top-1 z-20 hidden w-12 place-items-center bg-gradient-to-l from-canvas/90 to-transparent opacity-0 transition group-hover/row:opacity-100 md:-right-12 md:grid"><ChevronRight size={34} /></button>
           </div>
         )}
