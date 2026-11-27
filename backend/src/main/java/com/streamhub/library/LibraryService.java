@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -45,8 +46,13 @@ public class LibraryService {
 
     public record SubTrack(int index, String codec, String language, String title, boolean textBased) {}
 
-    /** Trecho que o player oferece pular: {@code intro}, {@code recap}, {@code credits} ou {@code preview}. */
-    public record SkipSegment(String kind, double start, double end) {}
+    /**
+     * Trecho que o player oferece pular: {@code intro}, {@code recap}, {@code credits} ou {@code preview}.
+     * {@code mixed}: a abertura/encerramento passa junto com cenas novas do episódio (o player não pula sozinho).
+     */
+    public record SkipSegment(String kind, double start, double end, boolean mixed) {
+        public SkipSegment(String kind, double start, double end) { this(kind, start, end, false); }
+    }
 
     public record MediaInfo(double duration, String videoCodec, String pixFmt, boolean directPlay,
                             List<AudioTrack> audio, List<SubTrack> subtitles, List<SkipSegment> skips, int fonts, String quality) {}
@@ -145,6 +151,36 @@ public class LibraryService {
         return dot < 0 ? "" : n.substring(dot + 1).toLowerCase();
     }
 
+    /** Pasta do título (primeiro nível dentro do local), temporada e episódio de um arquivo, pelo caminho relativo. */
+    public record EpisodeRef(String group, Integer season, Integer episode) {}
+
+    static EpisodeRef episodeRef(String rel) {
+        String fileName = rel.substring(rel.lastIndexOf('/') + 1);
+        String group = rel.contains("/") ? rel.substring(0, rel.indexOf('/')) : fileName.replaceFirst("\\.[^.]+$", "");
+        Matcher m = SXXEYY.matcher(fileName);
+        Integer season = null, ep = null;
+        if (m.find()) {
+            season = Integer.valueOf(m.group(1) != null ? m.group(1) : m.group(3));
+            ep = Integer.valueOf(m.group(2) != null ? m.group(2) : m.group(4));
+        } else {
+            Matcher a = ABSOLUTE.matcher(fileName);
+            while (a.find()) {   // vale o último "- NNN" do nome; ignora anos
+                int n = Integer.parseInt(a.group(1));
+                if (n > 0 && !(n >= 1900 && n <= 2099)) ep = n;
+            }
+        }
+        return new EpisodeRef(group, season, ep);
+    }
+
+    /** Tipo do local (ANIME, SERIES…) e posição do arquivo na série, a partir do id opaco. */
+    public Map.Entry<String, EpisodeRef> describe(String id) {
+        resolve(id);   // valida o id e a existência do arquivo
+        String raw = new String(Base64.getUrlDecoder().decode(id), StandardCharsets.UTF_8);
+        int i = raw.indexOf('|');
+        StorageLocation loc = storage.get(Long.parseLong(raw.substring(0, i)));
+        return Map.entry(loc.getKind(), episodeRef(raw.substring(i + 1).replace('\\', '/')));
+    }
+
     public List<LibraryFile> list(String kind) {
         List<LibraryFile> out = new ArrayList<>();
         for (StorageLocation loc : storage.all()) {
@@ -155,23 +191,11 @@ public class LibraryService {
                 s.filter(Files::isRegularFile).filter(p -> VIDEO.contains(ext(p))).forEach(p -> {
                     String rel = base.relativize(p).toString().replace('\\', '/');
                     String fileName = p.getFileName().toString();
-                    String group = rel.contains("/") ? rel.substring(0, rel.indexOf('/')) : fileName.replaceFirst("\\.[^.]+$", "");
-                    Matcher m = SXXEYY.matcher(fileName);
-                    Integer season = null, ep = null;
-                    if (m.find()) {
-                        season = Integer.valueOf(m.group(1) != null ? m.group(1) : m.group(3));
-                        ep = Integer.valueOf(m.group(2) != null ? m.group(2) : m.group(4));
-                    } else {
-                        Matcher a = ABSOLUTE.matcher(fileName);
-                        while (a.find()) {   // vale o último "- NNN" do nome; ignora anos
-                            int n = Integer.parseInt(a.group(1));
-                            if (n > 0 && !(n >= 1900 && n <= 2099)) ep = n;
-                        }
-                    }
+                    EpisodeRef ref = episodeRef(rel);
                     try {
                         java.nio.file.attribute.FileTime modified = Files.getLastModifiedTime(p);
-                        out.add(new LibraryFile(encodeId(loc.getId(), rel), fileName, group, loc.getKind(), Files.size(p),
-                            modified.toInstant(), season, ep, loc.getName(), rel, qualityOf(p, fileName, modified.toMillis())));
+                        out.add(new LibraryFile(encodeId(loc.getId(), rel), fileName, ref.group(), loc.getKind(), Files.size(p),
+                            modified.toInstant(), ref.season(), ref.episode(), loc.getName(), rel, qualityOf(p, fileName, modified.toMillis())));
                     } catch (IOException ignored) {
                         // arquivo sumiu durante a varredura
                     }

@@ -118,7 +118,24 @@ public class CatalogService {
     }
 
     private TitleDetails doDetails(String source, String type, String id) {
-        if (source.equals("anilist")) return new TitleDetails(localizer.localize(anilist.details(id)), List.of(), List.of(), List.of());
+        if (source.equals("anilist")) {
+            CatalogItem anime = localizer.localize(anilist.details(id));
+            String tvId = animeTvId(anime);
+            List<Season> seasons = List.of();
+            if (tvId != null) {
+                try { seasons = new ArrayList<>(tmdb.seasons(tvId)); } catch (Exception ignored) { tvId = null; }
+            }
+            // o TMDB costuma juntar as temporadas de anime numa só; a cadeia de sequências do AniList mostra todas
+            if (anime.format() == null || List.of("TV", "TV_SHORT", "ONA").contains(anime.format())) {
+                try {
+                    List<Season> chain = anilist.seasonChain(Integer.parseInt(id));
+                    if (chain.size() > seasons.size()) { seasons = chain; tvId = null; }
+                } catch (Exception e) {
+                    org.slf4j.LoggerFactory.getLogger(CatalogService.class).warn("Temporadas do AniList indisponíveis para {}: {}", id, e.toString());
+                }
+            }
+            return new TitleDetails(anime, seasons, List.of(), List.of(), tvId, searchTitles(anime.title(), anime.originalTitle()));
+        }
         CatalogItem item = tmdb.details(type, id);
         List<Person> directors = List.of(), cast = List.of();
         try {
@@ -128,7 +145,41 @@ public class CatalogService {
         } catch (Exception ignored) {
             // elenco é complementar: a página abre mesmo sem ele
         }
-        return new TitleDetails(item, type.equals("tv") ? new ArrayList<>(tmdb.seasons(id)) : List.of(), directors, cast);
+        boolean tv = type.equals("tv");
+        String english = null;
+        try { english = tmdb.englishTitle(type, id); } catch (Exception ignored) { }
+        return new TitleDetails(item, tv ? new ArrayList<>(tmdb.seasons(id)) : List.of(), directors, cast, tv ? id : null,
+            searchTitles(english, item.originalTitle(), item.title()));
+    }
+
+    private static final Pattern LATIN = Pattern.compile("[\\p{IsLatin}\\p{N}\\p{P}\\p{Zs}\\p{S}]+");
+
+    /** Nomes distintos para a busca de downloads; títulos em outra escrita (japonês, coreano…) ficam de fora. */
+    static List<String> searchTitles(String... names) {
+        List<String> out = new ArrayList<>();
+        for (String n : names) {
+            if (n == null || n.isBlank() || !LATIN.matcher(n).matches()) continue;
+            String t = n.trim();
+            if (out.stream().noneMatch(o -> o.equalsIgnoreCase(t))) out.add(t);
+        }
+        return out;
+    }
+
+    /** Série do TMDB que corresponde a um anime do AniList (só formatos de série); nulo sem TMDB ou sem resultado. */
+    private String animeTvId(CatalogItem anime) {
+        if (anime.format() != null && !List.of("TV", "TV_SHORT", "ONA").contains(anime.format())) return null;
+        List<String> names = new ArrayList<>();
+        if (anime.originalTitle() != null) names.add(anime.originalTitle());
+        if (anime.title() != null && !anime.title().equals(anime.originalTitle())) names.add(anime.title());
+        for (String n : names) {
+            try {
+                Optional<String> found = tmdb.findTvId(n, anime.year());
+                if (found.isPresent()) return found.get();
+            } catch (Exception e) {
+                return null;   // TMDB não configurado: a página segue sem temporadas
+            }
+        }
+        return null;
     }
 
     public List<Episode> episodes(String id, int season) { return tmdb.episodes(id, season); }

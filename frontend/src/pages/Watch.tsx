@@ -222,7 +222,7 @@ export default function Watch() {
   useEffect(() => { setNextHover(undefined) }, [id])
   const nextPreview = next && <NextPreview file={next} still={guideOf(guide, next)?.stillUrl} label={nextLabel} />
 
-  // pular abertura/recapitulação/encerramento, a partir dos capítulos do arquivo
+  // pular abertura/recapitulação/encerramento, a partir dos capítulos do arquivo (ou do AniSkip)
   const [autoSkip, setAutoSkip] = useState(() => { try { return localStorage.getItem('streamhub.autoSkip') === '1' } catch { return false } })
   const changeAutoSkip = (on: boolean) => {
     setAutoSkip(on)
@@ -235,10 +235,10 @@ export default function Watch() {
     if (!s) return undefined
     const endsEpisode = s.kind === 'preview' || duration - s.end < 150
     if ((s.kind === 'credits' || s.kind === 'preview') && endsEpisode) {
-      return next ? { seg: s, label: 'Próximo episódio', detail: nextLabel, go: () => goTo(next) } : undefined
+      return next ? { seg: s, label: 'Próximo episódio', detail: nextLabel, toNext: true, go: () => goTo(next) } : undefined
     }
     const label = s.kind === 'intro' ? 'Pular abertura' : s.kind === 'recap' ? 'Pular recapitulação' : 'Pular encerramento'
-    return { seg: s, label, detail: '', go: () => seek(s.end) }
+    return { seg: s, label, detail: s.mixed ? 'Tem cenas novas do episódio' : '', toNext: false, go: () => seek(s.end) }
   }, [info, abs, duration, next, nextLabel]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // prévia da barra de tempo: grade de miniaturas gerada no servidor, pedida só depois que o vídeo começou a tocar
@@ -293,6 +293,18 @@ export default function Watch() {
           ?? i.subtitles.find((s) => s.language === 'por' && s.textBased)
         setSubIdx(pt ? pt.index : -1)
         setInfo(i); setToken(t.token)
+        // arquivo sem abertura nos capítulos: completa com os tempos da comunidade (AniSkip), sem atrasar o início
+        if (!i.skips?.some((s) => s.kind === 'intro')) {
+          api<SkipSegment[]>(`/library/${id}/aniskip`).then((found) => {
+            if (dead || found.length === 0) return
+            setInfo((cur) => {
+              if (!cur) return cur
+              const have = new Set((cur.skips ?? []).map((s) => s.kind))
+              const skips = [...(cur.skips ?? []), ...found.filter((s) => !have.has(s.kind))].sort((a, b) => a.start - b.start)
+              return { ...cur, skips }
+            })
+          }).catch(() => { /* sem AniSkip: segue sem o botão */ })
+        }
       })
       .catch((e) => { if (!dead) setErr(e.message) })
     api<LibraryFile[]>('/library').then((list) => { if (!dead) setFiles(list) }).catch(() => {})
@@ -443,7 +455,8 @@ export default function Watch() {
 
   // pulo automático: só abertura e recapitulação, uma vez por trecho (voltar até ele de propósito não pula de novo)
   useEffect(() => {
-    if (!autoSkip || !skip || waiting || (skip.seg.kind !== 'intro' && skip.seg.kind !== 'recap')) return
+    // abertura com cenas novas por cima: só pula se a pessoa clicar
+    if (!autoSkip || !skip || waiting || skip.seg.mixed || (skip.seg.kind !== 'intro' && skip.seg.kind !== 'recap')) return
     if (autoSkipped.current.has(skip.seg.start)) return
     autoSkipped.current.add(skip.seg.start)
     skip.go()
@@ -661,15 +674,15 @@ export default function Watch() {
           </div>
         )}
         {skip && !menu && !volOpen && (
-          <button data-skip-btn onClick={skip.go} title={skip.detail ? undefined : `${skip.label} (s)`}
-            onMouseEnter={() => { if (skip.detail) setNextHover('skip') }} onMouseLeave={() => setNextHover(undefined)}
+          <button data-skip-btn onClick={skip.go} title={skip.toNext ? undefined : `${skip.label} (s)`}
+            onMouseEnter={() => { if (skip.toNext) setNextHover('skip') }} onMouseLeave={() => setNextHover(undefined)}
             className={`absolute right-3 z-10 flex items-center gap-1.5 rounded-md border border-white/40 bg-black/70 px-3 py-1.5 text-xs font-semibold text-white shadow-xl backdrop-blur transition-all hover:bg-white hover:text-black active:scale-95 sm:right-6 sm:gap-2 sm:px-5 sm:py-2.5 sm:text-base ${uiVisible ? 'bottom-[5.5rem] sm:bottom-24' : 'bottom-4 sm:bottom-8'}`}>
             <span className="min-w-0 text-left">
               <span className="block">{skip.label}</span>
               {skip.detail && <span className="block max-w-[11rem] truncate text-[11px] font-normal opacity-80 sm:max-w-xs sm:text-xs">{skip.detail}</span>}
             </span>
             <SkipForward size={16} className="shrink-0" />
-            {nextHover === 'skip' && skip.detail && nextPreview}
+            {nextHover === 'skip' && skip.toNext && nextPreview}
           </button>
         )}
         {file && (
@@ -711,7 +724,7 @@ export default function Watch() {
               {activeTab === 'rate' && <MenuGroup items={[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => ({ key: r, label: r === 1 ? 'Normal' : r + 'x', on: r === rate }))} onPick={(k) => { setRate(Number(k)); setMenu(false) }} />}
               {activeTab === 'skip' && <>
                 <MenuGroup items={[{ key: 0, label: 'Mostrar botão "Pular abertura"', on: !autoSkip }, { key: 1, label: 'Pular automaticamente', on: autoSkip }]} onPick={(k) => changeAutoSkip(k === 1)} />
-                <p className="mt-2 border-t border-white/10 px-3 py-3 text-xs text-zinc-400">Vale para abertura e recapitulação, em todos os episódios. O encerramento sempre mostra o botão.</p>
+                <p className="mt-2 border-t border-white/10 px-3 py-3 text-xs text-zinc-400">Vale para abertura e recapitulação, em todos os episódios. O encerramento e a abertura com cenas novas do episódio sempre mostram o botão.</p>
               </>}
             </div>
           </div>

@@ -26,11 +26,13 @@ public class LibraryController {
     private final LibraryService service;
     private final JellyfinClient jellyfin;
     private final VideoAccel accel;
+    private final AniSkipService aniskip;
 
-    public LibraryController(LibraryService service, JellyfinClient jellyfin, VideoAccel accel) {
+    public LibraryController(LibraryService service, JellyfinClient jellyfin, VideoAccel accel, AniSkipService aniskip) {
         this.service = service;
         this.jellyfin = jellyfin;
         this.accel = accel;
+        this.aniskip = aniskip;
     }
 
     @GetMapping
@@ -74,6 +76,15 @@ public class LibraryController {
 
     @GetMapping("/{id}/info")
     public LibraryService.MediaInfo info(@PathVariable String id) { return service.info(id); }
+
+    /** Abertura/encerramento do AniSkip, para animes sem capítulos no arquivo (pedido à parte para não atrasar o player). */
+    @GetMapping("/{id}/aniskip")
+    public List<LibraryService.SkipSegment> aniskip(@PathVariable String id) {
+        var d = service.describe(id);
+        if (!"ANIME".equalsIgnoreCase(d.getKey()) && !"GENERAL".equalsIgnoreCase(d.getKey())) return List.of();
+        LibraryService.EpisodeRef ref = d.getValue();
+        return aniskip.lookup(ref.group(), ref.season(), ref.episode(), service.info(id).duration());
+    }
 
     /** Reprodução com conversão: o navegador recebe MP4 fragmentado a partir de `start` segundos. */
     @GetMapping("/stream/{id}/transcode")

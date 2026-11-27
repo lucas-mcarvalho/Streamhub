@@ -94,11 +94,14 @@ export const fmtEta = (s?: number) => {
 }
 export const kindLabel: Record<string, string> = { MOVIE: 'Filme', SERIES: 'Série', ANIME: 'Anime', GENERAL: 'Geral' }
 export type Person = { name: string; role?: string; photoUrl?: string }
-export type TitleDetailsT = { item: CatalogItem; seasons: Season[]; directors: Person[]; cast: Person[] }
+/** tvId: série do TMDB de onde vêm as temporadas (num anime, a correspondente encontrada pelo título). */
+/** searchTitles: nomes para buscar downloads, começando pelo inglês (como os releases costumam ser nomeados). */
+export type TitleDetailsT = { item: CatalogItem; seasons: Season[]; directors: Person[]; cast: Person[]; tvId?: string | null; searchTitles?: string[] }
 export type AudioTrack = { index: number; codec?: string; language?: string; title?: string; channels: number }
 export type SubTrack = { index: number; codec?: string; language?: string; title?: string; textBased: boolean }
-/** Trecho marcado nos capítulos do arquivo que o player oferece pular. */
-export type SkipSegment = { kind: 'intro' | 'recap' | 'credits' | 'preview'; start: number; end: number }
+/** Trecho que o player oferece pular: dos capítulos do arquivo ou, em animes sem capítulos, do AniSkip. */
+/** mixed: a abertura/encerramento passa junto com cenas novas do episódio (marcado no AniSkip como "mixed-op"). */
+export type SkipSegment = { kind: 'intro' | 'recap' | 'credits' | 'preview'; start: number; end: number; mixed?: boolean }
 export type MediaInfo = { duration: number; videoCodec?: string; directPlay: boolean; audio: AudioTrack[]; subtitles: SubTrack[]; skips?: SkipSegment[]; fonts?: number; quality?: string | null }
 
 const STATUS: Record<string, string> = {
