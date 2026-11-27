@@ -26,11 +26,13 @@ public class LibraryController {
     private final LibraryService service;
     private final JellyfinClient jellyfin;
     private final VideoAccel accel;
+    private final AniSkipService aniskip;
 
-    public LibraryController(LibraryService service, JellyfinClient jellyfin, VideoAccel accel) {
+    public LibraryController(LibraryService service, JellyfinClient jellyfin, VideoAccel accel, AniSkipService aniskip) {
         this.service = service;
         this.jellyfin = jellyfin;
         this.accel = accel;
+        this.aniskip = aniskip;
     }
 
     @GetMapping
@@ -62,8 +64,27 @@ public class LibraryController {
             .body(service.thumbnail(id, t, w));
     }
 
+    /** Grade de miniaturas para a prévia da barra de tempo; o layout vai no cabeçalho X-Storyboard. */
+    @GetMapping("/{id}/storyboard")
+    public ResponseEntity<Resource> storyboard(@PathVariable String id) {
+        LibraryService.Storyboard sb = service.storyboard(id);
+        return ResponseEntity.ok().contentType(MediaType.IMAGE_JPEG).header("Cache-Control", "private, max-age=86400")
+            .header("X-Storyboard", "interval=" + sb.interval() + ";cols=" + sb.cols() + ";count=" + sb.count()
+                + ";w=" + sb.tileW() + ";h=" + sb.tileH())
+            .body(new FileSystemResource(sb.image()));
+    }
+
     @GetMapping("/{id}/info")
     public LibraryService.MediaInfo info(@PathVariable String id) { return service.info(id); }
+
+    /** Abertura/encerramento do AniSkip, para animes sem capítulos no arquivo (pedido à parte para não atrasar o player). */
+    @GetMapping("/{id}/aniskip")
+    public List<LibraryService.SkipSegment> aniskip(@PathVariable String id) {
+        var d = service.describe(id);
+        if (!"ANIME".equalsIgnoreCase(d.getKey()) && !"GENERAL".equalsIgnoreCase(d.getKey())) return List.of();
+        LibraryService.EpisodeRef ref = d.getValue();
+        return aniskip.lookup(ref.group(), ref.season(), ref.episode(), service.info(id).duration());
+    }
 
     /** Reprodução com conversão: o navegador recebe MP4 fragmentado a partir de `start` segundos. */
     @GetMapping("/stream/{id}/transcode")
@@ -93,6 +114,21 @@ public class LibraryController {
     public String subtitle(@PathVariable String id, @PathVariable int index, @RequestParam String token) {
         service.verifyToken(id, token);
         return service.subtitleVtt(id, index);
+    }
+
+    @GetMapping(value = "/stream/{id}/subtitle/{index}/ass", produces = "text/plain;charset=UTF-8")
+    public String subtitleAss(@PathVariable String id, @PathVariable int index, @RequestParam String token) {
+        service.verifyToken(id, token);
+        return service.subtitleAss(id, index);
+    }
+
+    @GetMapping("/stream/{id}/font/{n}")
+    public ResponseEntity<Resource> font(@PathVariable String id, @PathVariable int n, @RequestParam String token) {
+        service.verifyToken(id, token);
+        return ResponseEntity.ok()
+            .contentType(MediaType.APPLICATION_OCTET_STREAM)
+            .header("Cache-Control", "private, max-age=86400")
+            .body(new FileSystemResource(service.font(id, n)));
     }
 
     public record DeleteRequest(List<String> ids) {}

@@ -83,6 +83,41 @@ public class AniListClient {
         return out;
     }
 
+    /** Entrada do AniList com o id do MyAnimeList e as temporadas vizinhas (sequência/prequência em formato de série). */
+    public record Entry(int id, Integer idMal, Integer episodes, Integer sequelId, Integer prequelId, Integer year) {}
+
+    private static final java.util.Set<String> SERIES_FORMATS = java.util.Set.of("TV", "TV_SHORT", "ONA");
+
+    public Entry entry(int id) {
+        String q = "query($id:Int){Media(id:$id,type:ANIME){id idMal episodes startDate{year} relations{edges{relationType node{id type format}}}}}";
+        Map<String, Object> m = J.map(J.at(query(q, Map.of("id", id)), "Media"));
+        Integer sequel = null, prequel = null;
+        for (Map<String, Object> e : J.maps(J.at(m, "relations", "edges"))) {
+            Map<String, Object> n = J.map(e.get("node"));
+            String format = J.str(n.get("format"));   // pode vir nulo; Set.of(...).contains(null) lança exceção
+            if (!"ANIME".equals(n.get("type")) || format == null || !SERIES_FORMATS.contains(format)) continue;
+            if (sequel == null && "SEQUEL".equals(e.get("relationType"))) sequel = J.integer(n.get("id"));
+            if (prequel == null && "PREQUEL".equals(e.get("relationType"))) prequel = J.integer(n.get("id"));
+        }
+        return new Entry(id, J.integer(m.get("idMal")), J.integer(m.get("episodes")), sequel, prequel, J.integer(J.at(m, "startDate", "year")));
+    }
+
+    /** Temporadas da franquia: volta pelas prequências até a 1ª e segue as sequências (no máximo 12). */
+    public List<Season> seasonChain(int id) {
+        java.util.Set<Integer> seen = new java.util.HashSet<>();
+        Entry e = entry(id);
+        seen.add(e.id());
+        while (e.prequelId() != null && seen.add(e.prequelId()) && seen.size() < 12) e = entry(e.prequelId());
+        List<Season> out = new ArrayList<>();
+        seen.clear();
+        while (e != null && seen.add(e.id()) && out.size() < 12) {
+            out.add(new Season(out.size() + 1, "Temporada " + (out.size() + 1), e.episodes() == null ? 0 : e.episodes(),
+                e.year() == null ? null : e.year() + "-01-01"));
+            e = e.sequelId() == null ? null : entry(e.sequelId());
+        }
+        return out;
+    }
+
     public CatalogItem details(String id) {
         String q = "query($id:Int){Media(id:$id,type:ANIME){" + FIELDS + "}}";
         return map(J.map(J.at(query(q, Map.of("id", Integer.parseInt(id))), "Media")));

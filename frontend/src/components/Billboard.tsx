@@ -25,7 +25,8 @@ export default function Billboard({ items, children }: { items: CatalogItem[]; c
     it.episodes ? `${it.episodes} episódios` : it.seasons ? `${it.seasons} temporada${it.seasons > 1 ? 's' : ''}` : null,
   ].filter(Boolean)
   return (
-    <section className="relative h-[82vh] min-h-[520px] w-full overflow-hidden" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
+    <section className="relative h-[82vh] min-h-[520px] w-full overflow-hidden" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}
+      onFocus={() => setPaused(true)} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setPaused(false) }}>
       <AnimatePresence>
         <motion.img key={it.ref + 'bg'} src={it.backdropUrl} alt="" className="absolute inset-0 h-full w-full object-cover"
           initial={{ opacity: 0, scale: 1.06 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} transition={{ duration: 1.2, ease: 'easeOut' }} />
@@ -46,7 +47,7 @@ export default function Billboard({ items, children }: { items: CatalogItem[]; c
           </div>
           <p className="mt-4 line-clamp-3 max-w-xl text-sm leading-relaxed text-zinc-200 drop-shadow md:text-base">{it.overview || 'Sem sinopse disponível.'}</p>
           <div className="mt-6 flex flex-wrap gap-3">
-            <Link to={to} className="inline-flex items-center gap-2 rounded-md bg-white px-6 py-2.5 text-base font-bold text-black transition hover:bg-white/80 active:scale-95">
+            <Link to={to} data-tv-autofocus className="inline-flex items-center gap-2 rounded-md bg-white px-6 py-2.5 text-base font-bold text-black transition hover:bg-white/80 active:scale-95">
               <Play size={22} fill="currentColor" />Assistir
             </Link>
             <Link to={to} className="inline-flex items-center gap-2 rounded-md bg-zinc-500/50 px-6 py-2.5 text-base font-bold text-white backdrop-blur transition hover:bg-zinc-500/35 active:scale-95">
@@ -58,7 +59,7 @@ export default function Billboard({ items, children }: { items: CatalogItem[]; c
       {list.length > 1 && (
         <div className="absolute bottom-16 right-4 flex gap-1.5 md:bottom-24 md:right-12">
           {list.map((_, n) => (
-            <button key={n} onClick={() => setI(n)} aria-label={`Destaque ${n + 1}`}
+            <button key={n} tabIndex={-1} onClick={() => setI(n)} aria-label={`Destaque ${n + 1}`}
               className={`h-1 rounded-full transition-all duration-500 ${n === i ? 'w-7 bg-white' : 'w-3 bg-white/35 hover:bg-white/70'}`} />
           ))}
         </div>

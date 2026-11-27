@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Check, Loader2, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SkipForward, Volume2, VolumeX } from 'lucide-react'
-import { api, type AudioTrack, type GuideEpisode, type LibraryFile, type MediaInfo, type SubTrack } from '../api'
+import { ArrowLeft, Check, LayoutGrid, Loader2, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-react'
+import { api, authHeaders, progressOf, type AudioTrack, type GuideEpisode, type LibraryFile, type MediaInfo, type SkipSegment, type SubTrack } from '../api'
 import { Notice } from '../components/ui'
+import EpisodeGrid, { guideOf } from '../components/EpisodeGrid'
 import { parseVtt, subtitleAt, transcodeStart, type Cue } from '../lib/subtitles'
+import { attachStream, mseSupported } from '../lib/mseStream'
+import { saveProgress, syncProgress } from '../lib/progress'
+import { sameEpisode, versionLabel, versionsOf } from '../lib/versions'
+import JASSUB from 'jassub'
+import { isTV, keepScreenOn, onBack, setKeyInterceptor } from '../lib/tv'
 
 const LANGS: Record<string, string> = {
   por: 'Português', eng: 'Inglês', jpn: 'Japonês', spa: 'Espanhol', fre: 'Francês', ger: 'Alemão', ita: 'Italiano',
@@ -16,7 +22,7 @@ const subLabel = (s: SubTrack) =>
 
 const ctl = 'grid h-9 w-9 shrink-0 sm:h-10 sm:w-10 place-items-center rounded-full text-white transition hover:bg-white/15 active:bg-white/25'
 
-function MenuGroup({ items, onPick }: { items: { key: number; label: string; on: boolean; disabled?: boolean }[]; onPick: (k: number) => void }) {
+function MenuGroup<K extends number | string>({ items, onPick }: { items: { key: K; label: string; on: boolean; disabled?: boolean }[]; onPick: (k: K) => void }) {
   return (
     <div>
       {items.map((i) => (
@@ -35,7 +41,60 @@ function fmt(t: number) {
   return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0')
 }
 
-const coarse = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
+const coarse = () => !isTV && typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
+
+type Storyboard = { url: string; interval: number; cols: number; count: number; w: number; h: number }
+const SEGMENT_NAMES: Record<SkipSegment['kind'], string> = { intro: 'Abertura', recap: 'Recapitulação', credits: 'Encerramento', preview: 'Prévia' }
+
+/** Quadro do vídeo e tempo no ponto da barra sob o ponteiro, recortado da grade de miniaturas. */
+function SeekPreview({ hover, board, segment }: { hover: { x: number; width: number; t: number }; board?: Storyboard; segment?: SkipSegment['kind'] }) {
+  const pw = board ? Math.min(board.w, Math.max(120, hover.width * 0.4)) : 0
+  const scale = board ? pw / board.w : 1
+  const boxW = board ? pw : 72
+  const left = Math.max(0, Math.min(hover.x - boxW / 2, hover.width - boxW))
+  const n = board ? Math.min(board.count - 1, Math.max(0, Math.floor(hover.t / board.interval))) : 0
+  return (
+    <div className="pointer-events-none absolute bottom-full z-20 mb-2 flex flex-col items-center gap-1" style={{ left, width: boxW }}>
+      {board && (
+        <div className="overflow-hidden rounded-md border border-white/30 bg-black shadow-2xl"
+          style={{
+            width: pw, height: board.h * scale,
+            backgroundImage: `url(${board.url})`,
+            backgroundSize: `${board.cols * board.w * scale}px auto`,
+            backgroundPosition: `${-(n % board.cols) * board.w * scale}px ${-Math.floor(n / board.cols) * board.h * scale}px`,
+          }} />
+      )}
+      <span className="rounded bg-black/80 px-2 py-0.5 text-center text-xs font-semibold tabular-nums text-white">
+        {segment && <span className="mr-1.5 font-normal text-zinc-300">{SEGMENT_NAMES[segment]}</span>}{fmt(hover.t)}
+      </span>
+    </div>
+  )
+}
+
+/** Cartão com a capa e o nome do próximo episódio, acima do botão. Sem capa no guia, usa um quadro do próprio arquivo. */
+function NextPreview({ file, still, label }: { file: LibraryFile; still?: string; label: string }) {
+  const [frame, setFrame] = useState<string>()
+  useEffect(() => {
+    if (still) return
+    let dead = false
+    let url: string | undefined
+    fetch(`/api/library/${file.id}/thumb?t=300&w=480`, { headers: authHeaders() })
+      .then((r) => (r.ok ? r.blob() : Promise.reject()))
+      .then((b) => { if (!dead) { url = URL.createObjectURL(b); setFrame(url) } })
+      .catch(() => { /* sem miniatura: fica só o nome */ })
+    return () => { dead = true; if (url) URL.revokeObjectURL(url) }
+  }, [file.id, still])
+  const src = still ?? frame
+  return (
+    <span className="pointer-events-none absolute bottom-full right-0 z-30 mb-2 block w-56 overflow-hidden rounded-lg border border-white/20 bg-zinc-900 text-left text-white shadow-2xl sm:w-64">
+      <span className="block aspect-video bg-black">{src && <img src={src} alt="" className="h-full w-full object-cover" />}</span>
+      <span className="block px-3 py-2">
+        <span className="block text-[11px] font-normal uppercase tracking-wide text-zinc-400">Próximo episódio</span>
+        <span className="line-clamp-2 block text-xs font-semibold leading-snug">{label}</span>
+      </span>
+    </span>
+  )
+}
 
 export default function Watch() {
   const { id = '' } = useParams()
@@ -44,7 +103,7 @@ export default function Watch() {
   const video = useRef<HTMLVideoElement>(null)
   const pending = useRef<number | null>(null)
   const hideTimer = useRef<number>()
-  const posKey = 'streamhub.pos.' + id
+  const playBtn = useRef<HTMLButtonElement>(null)
 
   const [info, setInfo] = useState<MediaInfo>()
   const [token, setToken] = useState<string>()
@@ -55,6 +114,10 @@ export default function Watch() {
   const [audio, setAudio] = useState(0)
   const [subIdx, setSubIdx] = useState(-1)
   const [cues, setCues] = useState<Cue[]>([])
+  // legenda .ass original (estilos, falas no topo, placas), desenhada pelo libass no navegador
+  const [ass, setAss] = useState<string>()
+  const [assFailed, setAssFailed] = useState(false)
+  const assRenderer = useRef<JASSUB>()
   const [subtitleDelay, setSubtitleDelay] = useState(0)
   const [subtitleText, setSubtitleText] = useState('')
   const changeSubtitleDelay = (value: number) => {
@@ -74,9 +137,9 @@ export default function Watch() {
   const stallSince = useRef<number | null>(null)
   const healthySince = useRef<number | null>(null)
   const retries = useRef(0)
-  const [tab, setTab] = useState<'audio' | 'sub' | 'rate' | 'skip'>('sub')
+  const [tab, setTab] = useState<'audio' | 'sub' | 'quality' | 'rate' | 'skip'>('sub')
   const [fs, setFs] = useState(false)
-  const [fake, setFake] = useState(false)
+  const [fake, setFake] = useState(isTV)
   const [flash, setFlash] = useState<{ side: number; n: number }>()
   const menuOpen = useRef(false)
   const tapTimer = useRef<number>()
@@ -102,15 +165,64 @@ export default function Watch() {
       .then((g) => { if (!dead) setGuide(g) }).catch(() => {})
     return () => { dead = true }
   }, [file?.group, file?.kind]) // eslint-disable-line react-hooks/exhaustive-deps
-  const episodeTitle = file?.episode == null ? undefined
-    : guide.find((e) => (file.season != null ? e.season === file.season && e.number === file.episode : e.absolute === file.episode))?.name
+  const guideName = (f?: LibraryFile) => guideOf(guide, f)?.name
+  const episodeTitle = guideName(file)
   const episodeLabel = file?.season != null ? `T${file.season} · Episódio ${file.episode}` : file?.episode != null ? `Episódio ${file.episode}` : ''
-  const next = useMemo(() => {
+  // o mesmo episódio em outros arquivos (outras qualidades), para o seletor de qualidade
+  const versions = useMemo(() => (file ? versionsOf(files, file) : []), [files, file])
+  const quality = file?.quality ?? info?.quality ?? undefined
+  // vizinho na lista que seja outro episódio (não outra versão deste), de preferência na mesma qualidade
+  const neighbour = (step: 1 | -1) => {
     const i = files.findIndex((f) => f.id === id)
-    return i >= 0 && files[i + 1]?.group === files[i].group ? files[i + 1] : undefined
-  }, [files, id])
+    if (i < 0) return undefined
+    for (let j = i + step; files[j]?.group === files[i].group; j += step) {
+      if (sameEpisode(files[j], files[i])) continue
+      const options = versionsOf(files, files[j])
+      return options.find((v) => v.quality === files[i].quality) ?? options[0]
+    }
+    return undefined
+  }
+  const next = useMemo(() => neighbour(1), [files, id]) // eslint-disable-line react-hooks/exhaustive-deps
+  const prev = useMemo(() => neighbour(-1), [files, id]) // eslint-disable-line react-hooks/exhaustive-deps
+  // "Episódio 10 — Nome", para os botões de próximo episódio dizerem o que vem a seguir
+  const nextName = guideName(next)
+  const nextLabel = !next ? '' : next.episode == null ? next.name
+    : `${next.season != null ? `T${next.season} · ` : ''}Episódio ${next.episode}${nextName ? ' — ' + nextName : ''}`
 
-  // pular abertura/recapitulação/encerramento, a partir dos capítulos do arquivo
+  // Assistido: chegou ao encerramento (ou à prévia do próximo) ou passou de 90% — quase ninguém vê os créditos até o
+  // último segundo, e quem pula para o próximo episódio nunca chega ao fim do arquivo.
+  const endingStart = useMemo(() => {
+    const starts = (info?.skips ?? [])
+      .filter((s) => (s.kind === 'credits' || s.kind === 'preview') && (s.kind === 'preview' || duration - s.end < 150) && s.start > duration * 0.5)
+      .map((s) => s.start)
+    return Math.min(duration * 0.9, ...starts)
+  }, [info, duration])
+  const persist = () => {
+    if (!info || !(duration > 0) || abs <= 0) return
+    saveProgress(id, abs >= endingStart ? { pos: 0, dur: duration, done: true } : { pos: abs, dur: duration })
+  }
+  const persistRef = useRef(persist)
+  persistRef.current = persist
+  const goTo = (f: LibraryFile) => { persist(); nav('/watch/' + f.id) }
+  // troca de qualidade: abre o outro arquivo do mesmo episódio no ponto em que este está
+  const changeQuality = (f: LibraryFile) => {
+    if (f.id === id) return
+    persist()
+    if (duration > 0 && abs > 0) saveProgress(f.id, { pos: abs, dur: duration })
+    nav('/watch/' + f.id, { replace: true })
+  }
+
+  // lista de episódios do título, abaixo do player
+  const series = useMemo(() => (file ? files.filter((f) => f.group === file.group && f.kind === file.kind) : []), [files, file?.group, file?.kind]) // eslint-disable-line react-hooks/exhaustive-deps
+  const onPickEpisode = useCallback(() => persistRef.current(), [])
+  const [progressVersion, setProgressVersion] = useState(0)
+  useEffect(() => { window.scrollTo({ top: 0 }) }, [id])
+  // miniatura do próximo episódio ao passar o mouse nos botões de próximo
+  const [nextHover, setNextHover] = useState<'bar' | 'skip'>()
+  useEffect(() => { setNextHover(undefined) }, [id])
+  const nextPreview = next && <NextPreview file={next} still={guideOf(guide, next)?.stillUrl} label={nextLabel} />
+
+  // pular abertura/recapitulação/encerramento, a partir dos capítulos do arquivo (ou do AniSkip)
   const [autoSkip, setAutoSkip] = useState(() => { try { return localStorage.getItem('streamhub.autoSkip') === '1' } catch { return false } })
   const changeAutoSkip = (on: boolean) => {
     setAutoSkip(on)
@@ -123,11 +235,43 @@ export default function Watch() {
     if (!s) return undefined
     const endsEpisode = s.kind === 'preview' || duration - s.end < 150
     if ((s.kind === 'credits' || s.kind === 'preview') && endsEpisode) {
-      return next ? { seg: s, label: 'Próximo episódio', go: () => nav('/watch/' + next.id) } : undefined
+      return next ? { seg: s, label: 'Próximo episódio', detail: nextLabel, toNext: true, go: () => goTo(next) } : undefined
     }
     const label = s.kind === 'intro' ? 'Pular abertura' : s.kind === 'recap' ? 'Pular recapitulação' : 'Pular encerramento'
-    return { seg: s, label, go: () => seek(s.end) }
-  }, [info, abs, duration, next]) // eslint-disable-line react-hooks/exhaustive-deps
+    return { seg: s, label, detail: s.mixed ? 'Tem cenas novas do episódio' : '', toNext: false, go: () => seek(s.end) }
+  }, [info, abs, duration, next, nextLabel]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // prévia da barra de tempo: grade de miniaturas gerada no servidor, pedida só depois que o vídeo começou a tocar
+  // (gerar lê o arquivo inteiro e não deve atrasar o início da reprodução)
+  const [started, setStarted] = useState(false)
+  const [board, setBoard] = useState<Storyboard>()
+  const [hover, setHover] = useState<{ x: number; width: number; t: number }>()
+  useEffect(() => { setStarted(false); setBoard(undefined); setHover(undefined) }, [id])
+  useEffect(() => {
+    if (!started) return
+    let dead = false
+    let url: string | undefined
+    fetch(`/api/library/${id}/storyboard`, { headers: authHeaders() })
+      .then(async (r) => {
+        if (!r.ok) throw new Error()
+        const meta = Object.fromEntries((r.headers.get('X-Storyboard') ?? '').split(';').map((kv) => kv.split('=')).map(([k, v]) => [k, Number(v)]))
+        const blob = await r.blob()
+        if (dead || !(meta.interval > 0 && meta.cols > 0 && meta.count > 0 && meta.w > 0 && meta.h > 0)) return
+        url = URL.createObjectURL(blob)
+        setBoard({ url, interval: meta.interval, cols: meta.cols, count: meta.count, w: meta.w, h: meta.h })
+      })
+      .catch(() => { /* sem miniaturas: a prévia mostra só o tempo */ })
+    return () => { dead = true; if (url) URL.revokeObjectURL(url) }
+  }, [started, id])
+  // posição do ponteiro → tempo, com a mesma conta do <input type=range> (o centro do botão vai de 8 px a largura − 8 px)
+  const onSeekHover = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType !== 'mouse' && e.buttons === 0) return // no toque, só enquanto arrasta
+    const r = e.currentTarget.getBoundingClientRect()
+    const x = Math.max(0, Math.min(e.clientX - r.left, r.width))
+    const frac = r.width > 16 ? Math.max(0, Math.min(1, (x - 8) / (r.width - 16))) : 0
+    setHover({ x, width: r.width, t: frac * duration })
+  }
+  useEffect(() => { if (!showUi && playing) setHover(undefined) }, [showUi, playing])
 
   // carrega informações, token e lista da biblioteca
   useEffect(() => {
@@ -136,41 +280,117 @@ export default function Watch() {
     const savedDelay = Number(localStorage.getItem('streamhub.subtitleDelay.' + id))
     setSubtitleDelay(Number.isFinite(savedDelay) ? Math.max(-120, Math.min(120, savedDelay)) : 0)
     setInfo(undefined); setToken(undefined); setErr(undefined); setCues([]); setCur(0); setOffset(0); setAudio(0); setWaiting(true)
-    Promise.all([api<MediaInfo>(`/library/${id}/info`), api<{ token: string }>(`/library/${id}/token`)])
+    // o progresso vem do servidor antes, para continuar de onde parou mesmo que tenha sido em outro aparelho
+    Promise.all([api<MediaInfo>(`/library/${id}/info`), api<{ token: string }>(`/library/${id}/token`), syncProgress()])
       .then(([i, t]) => {
         if (dead) return
-        const saved = Number(localStorage.getItem(posKey))
+        setProgressVersion((v) => v + 1)
+        const saved = progressOf(id).pos
         pending.current = saved > 5 && saved < i.duration - 30 ? saved : null
         setMode(i.directPlay ? 'direct' : 'transcode')
         if (!i.directPlay && pending.current != null) { setOffset(pending.current); pending.current = null }
         const pt = i.subtitles.find((s) => s.language === 'por' && s.textBased && /brazil/i.test(s.title ?? ''))
           ?? i.subtitles.find((s) => s.language === 'por' && s.textBased)
         setSubIdx(pt ? pt.index : -1)
-        localStorage.setItem('streamhub.dur.' + id, String(i.duration))
         setInfo(i); setToken(t.token)
+        // arquivo sem abertura nos capítulos: completa com os tempos da comunidade (AniSkip), sem atrasar o início
+        if (!i.skips?.some((s) => s.kind === 'intro')) {
+          api<SkipSegment[]>(`/library/${id}/aniskip`).then((found) => {
+            if (dead || found.length === 0) return
+            setInfo((cur) => {
+              if (!cur) return cur
+              const have = new Set((cur.skips ?? []).map((s) => s.kind))
+              const skips = [...(cur.skips ?? []), ...found.filter((s) => !have.has(s.kind))].sort((a, b) => a.start - b.start)
+              return { ...cur, skips }
+            })
+          }).catch(() => { /* sem AniSkip: segue sem o botão */ })
+        }
       })
       .catch((e) => { if (!dead) setErr(e.message) })
     api<LibraryFile[]>('/library').then((list) => { if (!dead) setFiles(list) }).catch(() => {})
     return () => { dead = true }
-  }, [id, posKey])
+  }, [id])
 
-  // legenda selecionada
+  // legenda selecionada: .ass vai para o libass; as demais (ou se o libass falhar) viram texto simples
+  const subCodec = info?.subtitles.find((s) => s.index === subIdx)?.codec
+  const useAss = (subCodec === 'ass' || subCodec === 'ssa') && !assFailed
   useEffect(() => {
-    setCues([])
+    setCues([]); setAss(undefined)
     if (subIdx < 0 || !token) return
     let dead = false
+    if (useAss) {
+      fetch(`/api/library/stream/${id}/subtitle/${subIdx}/ass?token=${encodeURIComponent(token)}`)
+        .then((r) => (r.ok ? r.text() : Promise.reject()))
+        .then((t) => { if (!dead) setAss(t) })
+        .catch(() => { if (!dead) setAssFailed(true) })
+      return () => { dead = true }
+    }
     fetch(`/api/library/stream/${id}/subtitle/${subIdx}?token=${encodeURIComponent(token)}`)
       .then((r) => (r.ok ? r.text() : Promise.reject()))
       .then((t) => { if (!dead) setCues(parseVtt(t)) })
       .catch(() => { if (!dead) setErr('Não foi possível carregar a legenda selecionada.') })
     return () => { dead = true }
-  }, [subIdx, token, id])
+  }, [subIdx, token, id, useAss])
+
+  useEffect(() => { setAssFailed(false) }, [id])
+
 
   const src = token
     ? mode === 'direct'
       ? `/api/library/stream/${id}?token=${encodeURIComponent(token)}&r=${reload}`
       : `/api/library/stream/${id}/transcode?token=${encodeURIComponent(token)}&start=${transcodeStart(offset)}&audio=${audio}&r=${reload}`
     : undefined
+
+  // Vídeo convertido: a página lê o fluxo e alimenta o player (MediaSource). Deixar o navegador baixar por conta própria
+  // travava: com o buffer cheio ele fechava a conexão e pedia a continuação, que uma conversão ao vivo não tem como dar.
+  const [mseFailed, setMseFailed] = useState(false)
+  useEffect(() => { setMseFailed(false) }, [id])
+  const useMse = mode === 'transcode' && !mseFailed && mseSupported()
+  useEffect(() => {
+    const v = video.current
+    if (!v || !src || !useMse) return
+    return attachStream(v, src, () => setMseFailed(true))
+  }, [src, useMse])
+
+  // O <video> é recriado a cada troca de src (key), então o renderizador acompanha.
+  useEffect(() => {
+    const v = video.current
+    if (!ass || !v || !token) return
+    let r: JASSUB
+    try {
+      r = new JASSUB({
+        video: v,
+        subContent: ass,
+        workerUrl: '/jassub/jassub-worker.js',
+        wasmUrl: '/jassub/jassub-worker.wasm',
+        modernWasmUrl: '/jassub/jassub-worker-modern.wasm',
+        legacyWasmUrl: '/jassub/jassub-worker.wasm.js',
+        availableFonts: { 'liberation sans': '/jassub/default.woff2' },
+        fallbackFont: 'liberation sans',
+        fonts: Array.from({ length: info?.fonts ?? 0 }, (_, n) => `/api/library/stream/${id}/font/${n}?token=${encodeURIComponent(token)}`),
+        useLocalFonts: false,
+      })
+    } catch {
+      setAssFailed(true)
+      return
+    }
+    const onError = () => setAssFailed(true)
+    r.addEventListener('error', onError)
+    assRenderer.current = r
+    return () => {
+      r.removeEventListener('error', onError)
+      const parent = (r as unknown as { _canvasParent?: HTMLElement })._canvasParent
+      r.destroy()
+      parent?.remove() // o <video> antigo já saiu do DOM, então o destroy não acha o pai
+      if (assRenderer.current === r) assRenderer.current = undefined
+    }
+  }, [ass, src, useMse, token, id, info?.fonts])
+
+  // tempo da legenda = tempo do vídeo + início da conversão − atraso escolhido
+  useEffect(() => {
+    const r = assRenderer.current
+    if (r) (r as unknown as { timeOffset: number }).timeOffset = (mode === 'transcode' ? Number(transcodeStart(offset)) : 0) - subtitleDelay
+  })
 
   // Read the actual media clock on each animation frame, including pauses, seeks and speed changes.
   useEffect(() => {
@@ -186,10 +406,12 @@ export default function Watch() {
   }, [cues, subtitleDelay, mode, offset, src])
 
   // salva posição
+  // (o intervalo não pode depender da posição: ela muda várias vezes por segundo e ele nunca chegaria a disparar)
   useEffect(() => {
-    const t = setInterval(() => { if (playing && abs > 0) { localStorage.setItem(posKey, String(abs)); localStorage.setItem('streamhub.last.' + id, String(Date.now())); localStorage.removeItem('streamhub.done.' + id) } }, 5000)
+    if (!playing) return
+    const t = setInterval(() => persistRef.current(), 5000)
     return () => clearInterval(t)
-  }, [playing, abs, posKey, id])
+  }, [playing, id])
 
   // travou (sem dados por vários segundos) ou o fluxo acabou antes da hora: reabre o vídeo na posição atual,
   // o mesmo que voltar 10 s à mão
@@ -203,12 +425,16 @@ export default function Watch() {
   const recoverRef = useRef(recover)
   recoverRef.current = recover
 
+  const lastTime = useRef<{ v?: HTMLVideoElement; t: number }>({ t: -1 })
   useEffect(() => {
     const iv = window.setInterval(() => {
       const v = video.current
-      if (!v || v.paused || v.ended) { stallSince.current = null; healthySince.current = null; return }
+      if (!v || v.paused || v.ended || v.seeking) { stallSince.current = null; healthySince.current = null; lastTime.current = { t: -1 }; return }
       const now = Date.now()
-      if (v.readyState < 3) {
+      // imagem congelada: o navegador diz que tem dados, mas o relógio do vídeo não anda
+      const frozen = lastTime.current.v === v && lastTime.current.t === v.currentTime
+      lastTime.current = { v, t: v.currentTime }
+      if (v.readyState < 3 || frozen) {
         healthySince.current = null
         stallSince.current ??= now
         if (now - stallSince.current > 8000) { stallSince.current = null; recoverRef.current() }
@@ -229,7 +455,8 @@ export default function Watch() {
 
   // pulo automático: só abertura e recapitulação, uma vez por trecho (voltar até ele de propósito não pula de novo)
   useEffect(() => {
-    if (!autoSkip || !skip || waiting || (skip.seg.kind !== 'intro' && skip.seg.kind !== 'recap')) return
+    // abertura com cenas novas por cima: só pula se a pessoa clicar
+    if (!autoSkip || !skip || waiting || skip.seg.mixed || (skip.seg.kind !== 'intro' && skip.seg.kind !== 'recap')) return
     if (autoSkipped.current.has(skip.seg.start)) return
     autoSkipped.current.add(skip.seg.start)
     skip.go()
@@ -279,6 +506,7 @@ export default function Watch() {
 
   // atalhos de teclado
   useEffect(() => {
+    if (isTV) return
     const h = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === 'SELECT' || (e.target as HTMLElement)?.tagName === 'INPUT') return
       if (e.key === ' ' || e.key === 'k') { e.preventDefault(); toggle() }
@@ -293,14 +521,81 @@ export default function Watch() {
     return () => window.removeEventListener('keydown', h)
   }, [toggle, seek, fullscreen, abs, fake, skip])
 
-  useEffect(() => { if (video.current) { video.current.volume = volume; video.current.muted = muted } }, [volume, muted, src])
-  useEffect(() => { if (video.current) video.current.playbackRate = rate }, [rate, src])
+  useEffect(() => { if (video.current) { video.current.volume = volume; video.current.muted = muted } }, [volume, muted, src, useMse])
+  useEffect(() => { if (video.current) video.current.playbackRate = rate }, [rate, src, useMse])
 
   const poke = () => {
     setShowUi(true)
     window.clearTimeout(hideTimer.current)
     hideTimer.current = window.setTimeout(() => { if (!menuOpen.current) setShowUi(false) }, 3000)
   }
+
+  // Controle remoto (modo TV). Controles escondidos: ←/→ pulam 10 s, OK pausa, ↑/↓ mostram os controles.
+  // Controles visíveis: as setas andam entre os botões (navegação da TV) e cada tecla segura os controles na tela.
+  const tvKeys = useRef<(e: KeyboardEvent) => boolean>(() => false)
+  tvKeys.current = (e) => {
+    const k = e.key
+    if (k === 'MediaPlayPause' || k === 'MediaPlay' || k === 'MediaPause') {
+      const v = video.current
+      if (v) { if (k === 'MediaPlay') v.play(); else if (k === 'MediaPause') v.pause(); else toggle() }
+      poke(); return true
+    }
+    if (k === 'MediaFastForward') { seek(abs + 30); poke(); return true }
+    if (k === 'MediaRewind') { seek(abs - 30); poke(); return true }
+    if (k === 'MediaTrackNext' && next) { goTo(next); return true }
+    if (k === 'MediaTrackPrevious' && prev) { goTo(prev); return true }
+    if (menu || volOpen) { poke(); return false }
+    const hidden = playing && !showUi
+    const arrow = k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown'
+    if (hidden) {
+      if (k === 'ArrowLeft' || k === 'ArrowRight') {
+        const side = k === 'ArrowLeft' ? -1 : 1
+        const now = Date.now()
+        seek(abs + side * 10); setFlash({ side, n: now })
+        window.setTimeout(() => setFlash((f) => (f?.n === now ? undefined : f)), 600)
+        return true
+      }
+      if (k === 'Enter' || k === ' ') { toggle(); poke(); return true }
+      if (arrow) {
+        poke()
+        if (skip) (document.querySelector('[data-skip-btn]') as HTMLElement | null)?.focus()
+        else playBtn.current?.focus()
+        return true
+      }
+      return false
+    }
+    // barra de tempo focada: ←/→ andam 10 s (o padrão do controle deslizante seria 1 s)
+    const a = document.activeElement as HTMLInputElement | null
+    if (a?.classList.contains('seek') && (k === 'ArrowLeft' || k === 'ArrowRight')) { seek(abs + (k === 'ArrowLeft' ? -10 : 10)); poke(); return true }
+    // nada focado dentro do player: OK pausa/continua
+    if ((k === 'Enter' || k === ' ') && (!a || a === document.body || a.tagName === 'VIDEO')) { toggle(); poke(); return true }
+    if (arrow && (!a || a === document.body || !box.current?.contains(a))) { poke(); playBtn.current?.focus(); return true }
+    poke()
+    return false
+  }
+  useEffect(() => {
+    if (!isTV) return
+    setKeyInterceptor((e) => tvKeys.current(e))
+    // voltar: fecha o menu; depois esconde os controles; depois sai do player
+    const off = onBack(() => {
+      if (menu || volOpen) { setMenu(false); setVolOpen(false); playBtn.current?.focus(); return true }
+      if (playing && showUi) { window.clearTimeout(hideTimer.current); setShowUi(false); (document.activeElement as HTMLElement | null)?.blur(); return true }
+      return false
+    })
+    return () => { setKeyInterceptor(null); off() }
+  }, [menu, volOpen, playing, showUi])
+  // tela da TV não apaga enquanto o vídeo toca
+  useEffect(() => { if (isTV) keepScreenOn(playing) }, [playing])
+  useEffect(() => () => keepScreenOn(false), [])
+  // ao abrir o menu de configurações, o foco vai para a primeira opção
+  useEffect(() => {
+    if (!isTV || !menu) return
+    const t = window.setTimeout(() => (document.querySelector('[data-tv-scope].player-menu button') as HTMLElement | null)?.focus(), 50)
+    return () => window.clearTimeout(t)
+  }, [menu])
+
+  // ao trocar de episódio, os controles (com o nome do episódio no topo) aparecem por alguns segundos
+  useEffect(() => { poke() }, [id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // toque: 1 toque mostra/esconde os controles, 2 toques nas laterais pulam 10 s, 2 toques no centro pausam
   const onTap = (e: React.MouseEvent<HTMLElement>) => {
@@ -330,6 +625,7 @@ export default function Watch() {
   const tabs = [
     ...(info && info.audio.length > 1 ? [{ id: 'audio' as const, label: 'Áudio' }] : []),
     ...(info && info.subtitles.length > 0 ? [{ id: 'sub' as const, label: 'Legenda' }] : []),
+    ...(versions.length > 1 ? [{ id: 'quality' as const, label: 'Qualidade' }] : []),
     { id: 'rate' as const, label: 'Velocidade' },
     ...(info?.skips?.some((s) => s.kind === 'intro' || s.kind === 'recap') ? [{ id: 'skip' as const, label: 'Abertura' }] : []),
   ]
@@ -340,21 +636,21 @@ export default function Watch() {
     <div>
       <div className="mb-2 flex items-center justify-between text-sm">
         <Link to="/library" className="flex items-center gap-1 text-zinc-400 hover:text-white"><ArrowLeft size={16} />Biblioteca</Link>
-        <span className="line-clamp-2 pl-4 text-right text-zinc-300 sm:truncate">{file?.group}{episodeLabel && ` · ${episodeLabel}`}{episodeTitle && <span className="text-zinc-400"> — {episodeTitle}</span>}</span>
+        <span className="line-clamp-2 pl-4 text-right text-zinc-300 sm:truncate">{file?.group}{episodeLabel && ` · ${episodeLabel}`}{episodeTitle && <span className="text-zinc-400"> — {episodeTitle}</span>}{quality && <span title="Qualidade do vídeo" className="ml-2 rounded border border-line px-1.5 py-px align-middle text-[11px] font-bold text-zinc-300">{quality}</span>}</span>
       </div>
-      <div ref={box} onPointerMove={(e) => { if (e.pointerType === 'mouse') poke() }} onMouseLeave={() => !touch && playing && !menu && setShowUi(false)}
+      <div ref={box} data-tv-scope={isTV ? '' : undefined} onPointerMove={(e) => { if (e.pointerType === 'mouse') poke() }} onMouseLeave={() => !touch && playing && !menu && setShowUi(false)}
         className={`overflow-hidden bg-black ${fake ? 'fixed inset-0 z-[100] h-[100dvh] w-screen' : fs ? 'h-full w-full' : 'relative mx-auto aspect-video max-h-[calc(100dvh-5.5rem)] w-full rounded-lg'} ${uiVisible ? '' : 'cursor-none'}`}>
         {src && (
-          <video key={src} ref={video} src={src} autoPlay playsInline className="h-full w-full" onClick={onTap} onDoubleClick={() => { if (!touch) fullscreen() }}
-            onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
-            onWaiting={() => setWaiting(true)} onPlaying={() => setWaiting(false)} onCanPlay={() => setWaiting(false)}
+          <video key={src + (useMse ? '|mse' : '')} ref={video} src={useMse ? undefined : src} autoPlay playsInline className="h-full w-full" onClick={onTap} onDoubleClick={() => { if (!touch) fullscreen() }}
+            onPlay={() => setPlaying(true)} onPause={() => { setPlaying(false); persist() }}
+            onWaiting={() => setWaiting(true)} onPlaying={() => { setWaiting(false); setStarted(true) }} onCanPlay={() => setWaiting(false)}
             onTimeUpdate={(e) => setCur(e.currentTarget.currentTime)}
             onLoadedMetadata={(e) => {
               if (pending.current != null && mode === 'direct') { e.currentTarget.currentTime = pending.current; pending.current = null }
             }}
             onEnded={() => {
               if (mode === 'transcode' && duration > 0 && abs < duration - 10 && retries.current < 5) { recover(); return } // fluxo cortado antes do fim
-              localStorage.removeItem(posKey); localStorage.setItem('streamhub.done.' + id, '1'); if (next) nav('/watch/' + next.id) }}
+              saveProgress(id, { pos: 0, dur: duration, done: true }); if (next) nav('/watch/' + next.id) }}
             onError={() => {
               if (mode === 'direct') { setErr(undefined); setOffset(abs); setCur(0); setMode('transcode') }
               else if (abs > 0 && retries.current < 5) recover()
@@ -374,26 +670,32 @@ export default function Watch() {
         )}
         {subtitleText && (
           <div className={`pointer-events-none absolute inset-x-0 flex justify-center px-3 text-center transition-all sm:px-6 ${uiVisible ? 'bottom-24 sm:bottom-24' : 'bottom-6 sm:bottom-8'}`}>
-            <span className="whitespace-pre-line rounded bg-black/55 px-2 py-1 text-[15px] font-medium leading-snug text-white [text-shadow:0_1px_3px_#000] sm:text-lg md:text-2xl">{subtitleText}</span>
+            <span className="anime-sub whitespace-pre-line">{subtitleText}</span>
           </div>
         )}
         {skip && !menu && !volOpen && (
-          <button onClick={skip.go} title={`${skip.label} (s)`}
+          <button data-skip-btn onClick={skip.go} title={skip.toNext ? undefined : `${skip.label} (s)`}
+            onMouseEnter={() => { if (skip.toNext) setNextHover('skip') }} onMouseLeave={() => setNextHover(undefined)}
             className={`absolute right-3 z-10 flex items-center gap-1.5 rounded-md border border-white/40 bg-black/70 px-3 py-1.5 text-xs font-semibold text-white shadow-xl backdrop-blur transition-all hover:bg-white hover:text-black active:scale-95 sm:right-6 sm:gap-2 sm:px-5 sm:py-2.5 sm:text-base ${uiVisible ? 'bottom-[5.5rem] sm:bottom-24' : 'bottom-4 sm:bottom-8'}`}>
-            {skip.label}<SkipForward size={16} />
+            <span className="min-w-0 text-left">
+              <span className="block">{skip.label}</span>
+              {skip.detail && <span className="block max-w-[11rem] truncate text-[11px] font-normal opacity-80 sm:max-w-xs sm:text-xs">{skip.detail}</span>}
+            </span>
+            <SkipForward size={16} className="shrink-0" />
+            {nextHover === 'skip' && skip.toNext && nextPreview}
           </button>
         )}
         {file && (
           <div className={`pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/80 to-transparent px-4 pb-10 pt-3 transition-opacity sm:block sm:px-6 ${expanded ? '' : 'hidden'} ${uiVisible ? 'opacity-100' : 'opacity-0'}`} style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}>
-            <div className="truncate text-xs font-medium text-zinc-300 sm:text-sm">{file.group}</div>
+            <div className="truncate text-xs font-medium text-zinc-300 sm:text-sm">{file.group}{quality && ` · ${quality}`}</div>
             <div className="truncate text-base font-semibold text-white [text-shadow:0_1px_3px_#000] sm:text-xl">
               {episodeLabel ? <><span className="text-accent-400">{episodeLabel}</span>{episodeTitle && ` — ${episodeTitle}`}</> : file.name}
             </div>
           </div>
         )}
         {menu && info && (
-          <div className="absolute bottom-24 right-2 top-2 z-10 flex w-72 max-w-[calc(100%-1rem)] flex-col rounded-xl border border-white/10 bg-zinc-900/95 p-1.5 text-sm shadow-2xl backdrop-blur">
-            <div className="mb-1 flex shrink-0 gap-1">
+          <div data-tv-scope className="player-menu absolute bottom-24 right-2 top-2 z-10 flex w-72 max-w-[calc(100%-1rem)] flex-col rounded-xl border border-white/10 bg-zinc-900/95 p-1.5 text-sm shadow-2xl backdrop-blur">
+            <div className="mb-1 flex shrink-0 flex-wrap gap-1">
               {tabs.map((t) => (
                 <button key={t.id} onClick={() => setTab(t.id)} className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-semibold transition ${activeTab === t.id ? 'bg-accent-600 text-white' : 'text-zinc-300 hover:bg-white/10'}`}>{t.label}</button>
               ))}
@@ -415,20 +717,28 @@ export default function Watch() {
                   <p className="text-xs text-zinc-400">Se a fala antiga continua na tela, use Adiantar. Ajuste salvo para este episódio.</p>
                 </div>}
               </>}
+              {activeTab === 'quality' && <>
+                <MenuGroup items={versions.map((v) => ({ key: v.id, label: versionLabel(v, versions, true), on: v.id === id }))} onPick={(k) => { const v = versions.find((x) => x.id === k); setMenu(false); if (v) changeQuality(v) }} />
+                <p className="mt-2 border-t border-white/10 px-3 py-3 text-xs text-zinc-400">Este episódio está na biblioteca em mais de uma qualidade. A troca continua do ponto atual.</p>
+              </>}
               {activeTab === 'rate' && <MenuGroup items={[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => ({ key: r, label: r === 1 ? 'Normal' : r + 'x', on: r === rate }))} onPick={(k) => { setRate(Number(k)); setMenu(false) }} />}
               {activeTab === 'skip' && <>
                 <MenuGroup items={[{ key: 0, label: 'Mostrar botão "Pular abertura"', on: !autoSkip }, { key: 1, label: 'Pular automaticamente', on: autoSkip }]} onPick={(k) => changeAutoSkip(k === 1)} />
-                <p className="mt-2 border-t border-white/10 px-3 py-3 text-xs text-zinc-400">Vale para abertura e recapitulação, em todos os episódios. O encerramento sempre mostra o botão.</p>
+                <p className="mt-2 border-t border-white/10 px-3 py-3 text-xs text-zinc-400">Vale para abertura e recapitulação, em todos os episódios. O encerramento e a abertura com cenas novas do episódio sempre mostram o botão.</p>
               </>}
             </div>
           </div>
         )}
         <div className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent px-3 pt-10 transition-opacity sm:px-4 ${uiVisible ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
           style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}>
-          <input type="range" min={0} max={Math.max(1, Math.floor(duration))} value={Math.floor(abs)} onChange={(e) => seek(Number(e.target.value))}
-            className="seek mb-1 h-5 w-full cursor-pointer accent-accent-500" aria-label="Posição" />
+          <div className="relative" onPointerMove={onSeekHover} onPointerDown={onSeekHover} onPointerLeave={() => setHover(undefined)}
+            onPointerUp={(e) => { if (e.pointerType !== 'mouse') setHover(undefined) }} onPointerCancel={() => setHover(undefined)}>
+            {hover && duration > 0 && <SeekPreview hover={hover} board={board} segment={info?.skips?.find((s) => hover.t >= s.start && hover.t < s.end)?.kind} />}
+            <input type="range" min={0} max={Math.max(1, Math.floor(duration))} value={Math.floor(abs)} onChange={(e) => seek(Number(e.target.value))}
+              className="seek mb-1 h-5 w-full cursor-pointer accent-accent-500" aria-label="Posição" />
+          </div>
           <div className="flex min-w-0 items-center gap-0.5 text-sm sm:gap-1">
-            <button onClick={toggle} className={ctl} aria-label="Reproduzir/Pausar">{playing ? <Pause size={22} fill="white" /> : <Play size={22} fill="white" />}</button>
+            <button ref={playBtn} onClick={toggle} className={ctl} aria-label="Reproduzir/Pausar">{playing ? <Pause size={22} fill="white" /> : <Play size={22} fill="white" />}</button>
             <button onClick={() => seek(abs - 10)} className={ctl} title="Voltar 10s (←)" aria-label="Voltar 10 segundos"><RotateCcw size={20} /></button>
             <button onClick={() => seek(abs + 10)} className={ctl} title="Avançar 10s (→)" aria-label="Avançar 10 segundos"><RotateCw size={20} /></button>
             <span className="ml-1 min-w-0 truncate whitespace-nowrap text-xs tabular-nums text-zinc-300 sm:text-sm">{fmt(abs)} / {fmt(duration)}</span>
@@ -455,9 +765,12 @@ export default function Watch() {
                   )}
                 </span>
               )}
-              {next && <button onClick={() => nav('/watch/' + next.id)} title="Próximo episódio" aria-label="Próximo episódio" className="flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3"><span className="hidden sm:inline">Próximo</span><SkipForward size={16} /></button>}
-              <button onClick={() => { setMenu((m) => !m); setVolOpen(false) }} className={ctl} title="Áudio, legenda e velocidade" aria-label="Configurações"><Settings size={20} /></button>
-              <button onClick={fullscreen} className={ctl} title="Tela cheia (f)" aria-label="Tela cheia">{expanded ? <Minimize size={20} /> : <Maximize size={20} />}</button>
+              {file && file.episode != null && <Link to={`/episodes/${file.kind}/${encodeURIComponent(file.group)}`} title="Lista de episódios" aria-label="Lista de episódios" className="flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3"><LayoutGrid size={16} /><span className="hidden sm:inline">Episódios</span></Link>}
+              {prev && <button onClick={() => goTo(prev)} title="Episódio anterior" aria-label="Episódio anterior" className="flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3"><SkipBack size={16} /><span className="hidden sm:inline">Anterior</span></button>}
+              {next && <button onClick={() => goTo(next)} onMouseEnter={() => setNextHover('bar')} onMouseLeave={() => setNextHover(undefined)} aria-label={`Próximo episódio: ${nextLabel}`} className="relative flex h-9 min-w-0 shrink items-center gap-1 rounded-full px-2.5 text-xs font-semibold hover:bg-white/15 active:bg-white/25 sm:h-10 sm:px-3">{nextHover === 'bar' && nextPreview}<span className="hidden min-w-0 sm:inline"><span className="block leading-tight">Próximo</span>{next.episode != null && <span className="hidden max-w-[14rem] truncate text-[11px] font-normal leading-tight text-zinc-300 lg:block">{nextLabel}</span>}</span><SkipForward size={16} className="shrink-0" /></button>}
+              {versions.length > 1 && <button onClick={() => { setTab('quality'); setMenu((m) => !(m && activeTab === 'quality')); setVolOpen(false) }} title="Trocar a qualidade" aria-label={`Qualidade: ${quality ?? 'desconhecida'}. Trocar`} className="hidden h-9 shrink-0 items-center rounded-full border border-white/30 px-2.5 text-xs font-bold hover:bg-white/15 active:bg-white/25 sm:flex">{quality ?? 'Qualidade'}</button>}
+              <button onClick={() => { setMenu((m) => !m); setVolOpen(false) }} className={ctl} title="Áudio, legenda, qualidade e velocidade" aria-label="Configurações"><Settings size={20} /></button>
+              <button onClick={fullscreen} className={ctl + (isTV ? ' tv-hidden' : '')} title="Tela cheia (f)" aria-label="Tela cheia">{expanded ? <Minimize size={20} /> : <Maximize size={20} />}</button>
             </span>
           </div>
         </div>
@@ -467,6 +780,12 @@ export default function Watch() {
         {mode === 'transcode' ? 'Convertendo no servidor para o navegador (vídeo/áudio incompatível ou faixa de áudio trocada). ' : 'Reprodução direta. '}
         {touch ? 'Toque duas vezes nas laterais para pular 10 s e no centro para pausar.' : 'Atalhos: espaço = pausar · ←/→ = ±10s · f = tela cheia · m = mudo · s = pular abertura.'}
       </p>
+      {series.length > 1 && (
+        <section className="mt-8">
+          <h2 className="mb-4 font-display text-xl font-bold tracking-wide">Episódios<span className="ml-2 text-sm font-normal text-zinc-400">{file?.group}</span></h2>
+          <EpisodeGrid files={series} guide={guide} currentId={id} onPick={onPickEpisode} version={progressVersion} />
+        </section>
+      )}
     </div>
   )
 }

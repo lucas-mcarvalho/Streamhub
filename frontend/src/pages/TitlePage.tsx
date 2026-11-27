@@ -1,16 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { motion, useScroll, useTransform } from 'framer-motion'
-import { Calendar, Clapperboard, Clock, Film, Layers, Mic2, Radio, Tv, User, Users } from 'lucide-react'
-import { api, fmtBytes, formatPt, genrePt, statusPt, type Episode, type Indexer, type Location, type Person, type Release, type TitleDetailsT } from '../api'
-import { btn, btnGhost, input, Modal, Notice, Spinner, Bar, Chip, Score } from '../components/ui'
+import { AnimatePresence, motion, useScroll, useTransform } from 'framer-motion'
+import { Calendar, ChevronDown, Clapperboard, Clock, Download, Film, Layers, Mic2, Radio, Search, Tv, User, Users } from 'lucide-react'
+import { api, fmtBytes, formatPt, genrePt, statusPt, type Episode, type Indexer, type Location, type Download as DownloadT, type Person, type Release, type Season, type TitleDetailsT } from '../api'
+import { btn, input, Modal, Notice, Spinner, Bar, Chip, Score } from '../components/ui'
 import { useToast } from '../components/Toast'
+import { flyToDownloads } from '../components/DownloadFly'
+import { useEpisodePicker } from '../components/EpisodePicker'
 import { useAsync } from '../hooks'
 
 const safeName = (s: string) => s.replace(/[\\/:*?"<>|]/g, '').trim()
 
-function DownloadModal({ release, title, kind, catalogRef, relDefault, onClose }: {
-  release: Release; title: string; kind: string; catalogRef: string; relDefault: string; onClose: () => void
+function DownloadModal({ release, title, kind, catalogRef, relDefault, poster, onClose }: {
+  release: Release; title: string; kind: string; catalogRef: string; relDefault: string; poster?: string; onClose: () => void
 }) {
   const toast = useToast()
   const locs = useAsync(() => api<Location[]>('/storage/locations'), [])
@@ -28,14 +30,20 @@ function DownloadModal({ release, title, kind, catalogRef, relDefault, onClose }
     catch (e) { toast((e as Error).message, 'err') }
   }
 
-  const start = async () => {
+  const pick = useEpisodePicker()
+  const start = async (e: React.MouseEvent<HTMLButtonElement>) => {
+    const from = e.currentTarget.getBoundingClientRect()
     setBusy(true)
     try {
-      await api('/downloads', { method: 'POST', json: {
+      const created = await api<DownloadT>('/downloads', { method: 'POST', json: {
         title: release.title, kind, catalogRef, indexer: release.indexer, magnetUrl: release.magnetUrl, downloadUrl: release.downloadUrl,
         sizeBytes: release.sizeBytes, locationId: chosen?.id, relativePath: rel, chooseFiles,
       } })
-      toast('Download iniciado'); onClose()
+      onClose()
+      // escolher episódios: o seletor abre aqui mesmo, e a animação acontece ao confirmar a escolha
+      if (chooseFiles) { pick(created); return }
+      flyToDownloads(from, poster)
+      toast('Download iniciado')
     } catch (e) { toast((e as Error).message, 'err') } finally { setBusy(false) }
   }
   return (
@@ -61,52 +69,94 @@ function DownloadModal({ release, title, kind, catalogRef, relDefault, onClose }
           <label className="mb-4 flex cursor-pointer items-start gap-2 rounded-lg border border-line bg-surface2/40 p-3 text-sm">
             <input type="checkbox" className="mt-0.5 accent-accent-500" checked={chooseFiles} onChange={(e) => setChooseFiles(e.target.checked)} />
             <span><b>Escolher quais episódios baixar</b><br /><span className="text-xs text-zinc-400">
-              {isPack ? 'Este release parece um pacote com vários episódios. ' : ''}O download pausa assim que a lista de arquivos estiver disponível e você marca só o que quer.</span></span>
+              {isPack ? 'Este release parece um pacote com vários episódios. ' : ''}A lista de episódios abre aqui mesmo assim que o torrent informar os arquivos. Dá para mudar a escolha depois, com o download em andamento.</span></span>
           </label>
-          <button className={btn} disabled={busy || !chosen || chosen.offline || !enough} onClick={start}>Iniciar download</button>
+          <button className={btn + ' w-full py-2.5'} disabled={busy || !chosen || chosen.offline || !enough} onClick={start}>
+            <Download size={16} />{busy ? 'Iniciando…' : 'Iniciar download'}</button>
         </>
       )}
     </Modal>
   )
 }
 
-function ReleaseSearch({ d }: { d: TitleDetailsT }) {
+/** Pedido vindo de fora da busca (botão "Baixar" do topo ou "Baixar temporada"): busca já com a temporada escolhida. */
+type SearchRequest = { n: number; season: number | null }
+
+const kindNoun = (kind: string) => (kind === 'MOVIE' ? 'filme' : kind === 'ANIME' ? 'anime' : 'série')
+
+function SeasonPicker({ count, value, onChange }: { count: number; value: number | null; onChange: (n: number | null) => void }) {
+  const opts: (number | null)[] = [null, ...Array.from({ length: count }, (_, i) => i + 1)]
+  return (
+    <div className="flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Temporada">
+      {opts.map((n) => {
+        const on = value === n
+        return (
+          <button key={n ?? 'all'} type="button" role="radio" aria-checked={on} onClick={() => onChange(n)}
+            className={`relative rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${on ? 'text-white' : 'bg-surface2/70 text-zinc-300 hover:bg-surface2 hover:text-white'}`}>
+            {on && <motion.span layoutId="dl-season" className="absolute inset-0 rounded-full bg-accent-600 shadow-lg shadow-accent-600/30" transition={{ type: 'spring', stiffness: 420, damping: 32 }} />}
+            <span className="relative">{n == null ? 'Todas' : `T${n}`}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function ReleaseSearch({ d, request }: { d: TitleDetailsT; request?: SearchRequest }) {
   const { item } = d
   const toast = useToast()
-  const [query, setQuery] = useState(item.kind === 'MOVIE' && item.year ? `${item.title} ${item.year}` : item.title)
+  // releases costumam vir com o nome em inglês: ele é o termo principal; os outros nomes entram na mesma busca
+  const names = d.searchTitles?.length ? d.searchTitles : [item.title]
+  const withYear = (t: string) => (item.kind === 'MOVIE' && item.year ? `${t} ${item.year}` : t)
+  const [query, setQuery] = useState(withYear(names[0]))
+  const [useAlt, setUseAlt] = useState(true)
+  const alts = names.filter((n) => withYear(n).toLowerCase() !== query.trim().toLowerCase())
   const [indexers, setIndexers] = useState<Indexer[]>([])
   const [picked, setPicked] = useState<number[]>([])
   const [res, setRes] = useState('')
   const [audio, setAudio] = useState('')
   const [sub, setSub] = useState('')
-  const [seasonQ, setSeasonQ] = useState('')
+  const [seasonQ, setSeasonQ] = useState<number | null>(null)
   const [seasonF, setSeasonF] = useState('')
   const [epF, setEpF] = useState('')
   const isShow = item.kind !== 'MOVIE'
+  // só as temporadas que existem (TMDB, sem os especiais)
+  const seasonCount = d.seasons.length > 0 ? Math.max(...d.seasons.map((s) => s.number)) : 0
   const [rows, setRows] = useState<Release[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [dl, setDl] = useState<Release | null>(null)
+  const [moreFilters, setMoreFilters] = useState(false)
 
   useEffect(() => {
     api<Indexer[]>('/indexers').then((l) => setIndexers(l.filter((i) => i.enabled))).catch((e) => toast(e.message, 'err'))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const search = async () => {
+  const search = async (season: number | null = seasonQ) => {
     setLoading(true)
     try {
-      const sq = seasonQ ? ` S${seasonQ.padStart(2, '0')}` : ''
+      const sq = season != null ? ` S${String(season).padStart(2, '0')}` : ''
       const qs = new URLSearchParams({ query: query + sq, kind: item.kind })
+      if (useAlt) alts.forEach((a) => qs.append('alt', withYear(a) + sq))
       picked.forEach((p) => qs.append('indexerIds', String(p)))
       if (res) qs.set('resolution', res)
-      setSeasonF(seasonQ)
+      setSeasonF(season != null ? String(season) : ''); setEpF('')
       setRows(await api<Release[]>('/search/releases?' + qs))
     } catch (e) { toast((e as Error).message, 'err'); setRows([]) } finally { setLoading(false) }
   }
+  const pickSeason = (n: number | null) => { setSeasonQ(n); if (rows) search(n) }
+  useEffect(() => {
+    if (!request) return
+    setSeasonQ(request.season)
+    search(request.season)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request?.n])
+
   const hasPtBr = (r: Release) => r.subtitleHints.includes('Legenda PT-BR')
   const hasMulti = (r: Release) => r.subtitleHints.some((h) => h.startsWith('Multi-legendas'))
   const inSeason = (r: Release, n: number) => r.season != null && n >= r.season && n <= (r.seasonEnd ?? r.season)
-  const seasonsFound = [...new Set((rows ?? []).flatMap((r) => (r.season == null ? [] : Array.from({ length: (r.seasonEnd ?? r.season) - r.season + 1 }, (_, i) => r.season! + i))))].sort((a, b) => a - b)
+  const seasonsFound = [...new Set((rows ?? []).flatMap((r) => (r.season == null ? [] : Array.from({ length: (r.seasonEnd ?? r.season) - r.season + 1 }, (_, i) => r.season! + i))))]
+    .filter((n) => !seasonCount || n <= seasonCount).sort((a, b) => a - b)
   const hasUnknown = (rows ?? []).some((r) => r.season == null)
   const shown = rows?.filter((r) => {
     if (!isShow || !seasonF) return true
@@ -115,62 +165,92 @@ function ReleaseSearch({ d }: { d: TitleDetailsT }) {
     return inSeason(r, n) && (!epF || r.episode == null || r.episode === Number(epF))
   }).filter((r) => (!audio || r.audioHints.includes(audio))
     && (!sub || hasPtBr(r) || (sub === 'ptbr+multi' && hasMulti(r))))
+  const select = input + ' !w-auto'
   return (
-    <section className="mt-8">
-      <h2 className="mb-3 text-xl font-semibold">Buscar downloads</h2>
-      <p className="mb-2 text-xs text-zinc-500">Para séries/animes, acrescente a temporada ou o episódio à busca (ex.: "S01" ou "S01E03"). Use apenas conteúdo que você tem autorização para obter.</p>
-      <div className="mb-3 flex flex-wrap gap-2">
-        <input className={input + ' max-w-md'} value={query} onChange={(e) => setQuery(e.target.value)} />
-        {isShow && <input className={input + ' !w-28'} type="number" min={1} placeholder="Temporada" value={seasonQ} onChange={(e) => setSeasonQ(e.target.value)} title="Acrescenta SNN à busca (ex.: 1 → S01)" />}
-        <select className={input + ' !w-auto'} value={res} onChange={(e) => setRes(e.target.value)}>
-          <option value="">Qualquer resolução</option><option>4K</option><option>1080p</option><option>720p</option>
-        </select>
-        <select className={input + ' !w-auto'} value={audio} onChange={(e) => setAudio(e.target.value)}>
-          <option value="">Qualquer áudio</option><option>Português</option><option>Multi</option><option>Inglês</option><option>Japonês</option>
-        </select>
-        <select className={input + ' !w-auto'} value={sub} onChange={(e) => setSub(e.target.value)}>
-          <option value="">Qualquer legenda</option>
-          <option value="ptbr">Legendado em PT-BR</option>
-          <option value="ptbr+multi">PT-BR ou multi-legendas</option>
-        </select>
-        <button className={btn} disabled={loading} onClick={search}>{loading ? 'Buscando…' : 'Buscar'}</button>
-      </div>
-      {indexers.length > 0 && (
-        <div className="mb-3 flex flex-wrap gap-3 text-xs">
-          <span className="text-zinc-400">Indexadores (vazio = todos):</span>
-          {indexers.map((i) => (
-            <label key={i.id} className="flex items-center gap-1"><input type="checkbox" checked={picked.includes(i.id)}
-              onChange={(e) => setPicked(e.target.checked ? [...picked, i.id] : picked.filter((p) => p !== i.id))} />{i.name}</label>
-          ))}
+    <section id="baixar" className="mt-10 scroll-mt-28">
+      <h2 className="mb-1 flex items-center gap-2 font-display text-2xl font-semibold tracking-wide"><Download size={20} className="text-accent-400" />Baixar {kindNoun(item.kind)}</h2>
+      <p className="mb-4 text-xs text-zinc-500">Use apenas conteúdo que você tem autorização para obter.</p>
+      <div className="glass rounded-2xl p-4">
+        <form className="flex flex-col gap-3 sm:flex-row" onSubmit={(e) => { e.preventDefault(); search() }}>
+          <div className="relative flex-1">
+            <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+            <input className={input + ' !pl-9'} value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Termo da busca" />
+          </div>
+          <button className={btn + ' px-6'} disabled={loading}><Search size={16} />{loading ? 'Buscando…' : 'Buscar'}</button>
+        </form>
+        {alts.length > 0 && (
+          <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
+            <input type="checkbox" className="accent-accent-500" checked={useAlt} onChange={(e) => setUseAlt(e.target.checked)} />
+            <span>Buscar também como {alts.map((a, i) => <span key={a}>{i ? ', ' : ''}<b className="font-semibold text-zinc-200">{a}</b></span>)}</span>
+          </label>
+        )}
+        {isShow && seasonCount > 0 && (
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <span className="text-xs font-semibold uppercase tracking-wider text-zinc-400">{seasonCount === 1 ? '1 temporada' : `${seasonCount} temporadas`}</span>
+            <SeasonPicker count={seasonCount} value={seasonQ} onChange={pickSeason} />
+          </div>
+        )}
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <select className={select} value={res} onChange={(e) => setRes(e.target.value)} aria-label="Resolução">
+            <option value="">Qualquer resolução</option><option>4K</option><option>1080p</option><option>720p</option>
+          </select>
+          <select className={select} value={audio} onChange={(e) => setAudio(e.target.value)} aria-label="Áudio">
+            <option value="">Qualquer áudio</option><option>Português</option><option>Multi</option><option>Inglês</option><option>Japonês</option>
+          </select>
+          <select className={select} value={sub} onChange={(e) => setSub(e.target.value)} aria-label="Legenda">
+            <option value="">Qualquer legenda</option>
+            <option value="ptbr">Legendado em PT-BR</option>
+            <option value="ptbr+multi">PT-BR ou multi-legendas</option>
+          </select>
+          {indexers.length > 0 && (
+            <button type="button" onClick={() => setMoreFilters(!moreFilters)} className="ml-auto inline-flex items-center gap-1 text-xs text-zinc-400 hover:text-white">
+              Indexadores{picked.length ? ` (${picked.length})` : ''}<ChevronDown size={14} className={`transition ${moreFilters ? 'rotate-180' : ''}`} />
+            </button>
+          )}
         </div>
-      )}
-      {isShow && rows && rows.length > 0 && (
-        <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-zinc-400">Filtrar resultados por temporada:</span>
-          <select className={input + ' !w-auto'} value={seasonF} onChange={(e) => setSeasonF(e.target.value)}>
-            <option value="">Todas</option>
+        {moreFilters && indexers.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-3 border-t border-line/60 pt-3 text-xs">
+            <span className="text-zinc-400">Vazio = todos:</span>
+            {indexers.map((i) => (
+              <label key={i.id} className="flex items-center gap-1"><input type="checkbox" className="accent-accent-500" checked={picked.includes(i.id)}
+                onChange={(e) => setPicked(e.target.checked ? [...picked, i.id] : picked.filter((p) => p !== i.id))} />{i.name}</label>
+            ))}
+          </div>
+        )}
+      </div>
+      {isShow && rows && rows.length > 0 && (seasonsFound.length > 0 || hasUnknown) && (
+        <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-zinc-400">Mostrar:</span>
+          <select className={select} value={seasonF} onChange={(e) => { setSeasonF(e.target.value); setEpF('') }} aria-label="Filtrar resultados por temporada">
+            <option value="">Todas as temporadas</option>
             {seasonsFound.map((n) => <option key={n} value={n}>Temporada {n}</option>)}
             {hasUnknown && <option value="none">Sem temporada no nome (numeração contínua)</option>}
           </select>
           {seasonF && seasonF !== 'none' && <input className={input + ' !w-28'} type="number" min={1} placeholder="Episódio" value={epF} onChange={(e) => setEpF(e.target.value)} />}
         </div>
       )}
-      {shown && (shown.length === 0 ? <p className="text-sm text-zinc-500">Nenhum resultado.</p> : (
-        <div className="overflow-x-auto">
+      {loading && !rows && <Spinner />}
+      {shown && (shown.length === 0 ? <p className="mt-4 text-sm text-zinc-500">Nenhum resultado.</p> : (
+        <div className="mt-4 overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead className="text-xs text-zinc-400"><tr><th className="py-2">Release</th><th>Qualidade</th><th>Tamanho</th><th title="Seeders / leechers: mais seeders = download mais rápido">Seeders</th><th>Idioma (pelo nome)</th><th>Indexador</th><th /></tr></thead>
             <tbody>
               {shown.map((r) => (
-                <tr key={r.guid + r.indexerId} className="border-t border-line align-top">
-                  <td className="max-w-md break-all py-2 pr-2">{r.title}{isShow && <span className="ml-2 whitespace-nowrap rounded bg-surface2 px-1.5 text-xs text-zinc-300">{r.season == null ? 'temporada ?' : r.seasonEnd ? `T${r.season}–${r.seasonEnd}` : `T${r.season}${r.episode != null ? ' E' + r.episode : ''}`}</span>}</td>
-                  <td>{r.resolution} <span className="text-xs text-zinc-500">{r.source} {r.codec}</span></td>
-                  <td>{fmtBytes(r.sizeBytes)}</td>
-                  <td title={(r.seeders ?? 0) < 5 ? 'Poucos seeders: o download tende a ser lento' : 'Boa quantidade de seeders'}>
+                <tr key={r.guid + r.indexerId} className="group border-t border-line align-top transition hover:bg-white/[0.03]">
+                  <td className="max-w-md break-all py-2.5 pr-2">{r.title}{isShow && <span className="ml-2 whitespace-nowrap rounded bg-surface2 px-1.5 text-xs text-zinc-300">{r.season == null ? 'temporada ?' : r.seasonEnd ? `T${r.season}–${r.seasonEnd}` : `T${r.season}${r.episode != null ? ' E' + r.episode : ''}`}</span>}</td>
+                  <td className="py-2.5">{r.resolution} <span className="text-xs text-zinc-500">{r.source} {r.codec}</span></td>
+                  <td className="py-2.5">{fmtBytes(r.sizeBytes)}</td>
+                  <td className="py-2.5" title={(r.seeders ?? 0) < 5 ? 'Poucos seeders: o download tende a ser lento' : 'Boa quantidade de seeders'}>
                     <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${r.seeders == null ? 'bg-surface2 text-zinc-400' : r.seeders >= 20 ? 'bg-emerald-500/20 text-emerald-300' : r.seeders >= 5 ? 'bg-amber-500/20 text-amber-300' : 'bg-red-500/20 text-red-300'}`}>{r.seeders ?? '?'}</span>
                     <span className="ml-1 text-xs text-zinc-500">/ {r.leechers ?? '?'}</span></td>
-                  <td className="text-xs">{[...r.audioHints, ...r.subtitleHints].join(', ') || 'não identificado'}</td>
-                  <td className="text-xs">{r.indexer}</td>
-                  <td><button className={btnGhost} onClick={() => setDl(r)}>Baixar</button></td>
+                  <td className="py-2.5 text-xs">{[...r.audioHints, ...r.subtitleHints].join(', ') || 'não identificado'}</td>
+                  <td className="py-2.5 text-xs">{r.indexer}</td>
+                  <td className="py-2 pl-2">
+                    <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.92 }} onClick={() => setDl(r)}
+                      className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-accent-600/90 px-3 py-1.5 text-xs font-bold text-white shadow-md shadow-accent-600/20 transition hover:bg-accent-500">
+                      <Download size={14} />Baixar
+                    </motion.button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -178,7 +258,7 @@ function ReleaseSearch({ d }: { d: TitleDetailsT }) {
           <p className="mt-2 text-xs text-zinc-500">O idioma é inferido do nome do arquivo e não é garantido. Após baixar, use "Verificar faixas" no player.</p>
         </div>
       ))}
-      {dl && <DownloadModal release={dl} title={item.title} kind={item.kind} catalogRef={item.ref}
+      {dl && <DownloadModal release={dl} title={item.title} kind={item.kind} catalogRef={item.ref} poster={item.posterUrl}
         relDefault={safeName(item.title) + (item.year ? ` (${item.year})` : '')} onClose={() => setDl(null)} />}
     </section>
   )
@@ -251,12 +331,63 @@ function CastSection({ directors, cast }: { directors: Person[]; cast: Person[] 
   )
 }
 
+/** tvId nulo (temporadas de anime vindas do AniList): sem lista de episódios, só a escolha da temporada para baixar. */
+function Seasons({ seasons, tvId, onDownload }: { seasons: Season[]; tvId: string | null; onDownload: (n: number) => void }) {
+  const [season, setSeason] = useState<number | null>(null)
+  const eps = useAsync(() => (season == null || !tvId ? Promise.resolve([] as Episode[]) : api<Episode[]>(`/catalog/title/tmdb/tv/${tvId}/seasons/${season}`)), [season, tvId])
+  const total = seasons.reduce((a, s) => a + (s.episodeCount || 0), 0)
+  return (
+    <section className="mt-10">
+      <div className="mb-4 flex flex-wrap items-baseline gap-x-3">
+        <h2 className="flex items-center gap-2 font-display text-2xl font-semibold tracking-wide"><Tv size={20} className="text-accent-400" />Temporadas</h2>
+        <span className="text-sm text-zinc-400">{seasons.length === 1 ? '1 temporada' : `${seasons.length} temporadas`}{total ? ` · ${total} episódios` : ''}</span>
+      </div>
+      <div className="no-scrollbar -mx-1 flex gap-3 overflow-x-auto px-1 pb-2">
+        {seasons.map((s, n) => {
+          const on = season === s.number
+          const year = s.airDate?.slice(0, 4)
+          return (
+            <motion.button key={s.number} type="button" aria-pressed={on} onClick={() => setSeason(on ? null : s.number)}
+              initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(n, 10) * 0.04 }} whileHover={{ y: -3 }} whileTap={{ scale: 0.96 }}
+              className={`relative w-36 shrink-0 overflow-hidden rounded-xl border p-3 text-left transition ${on ? 'border-accent-500 text-white' : 'border-line bg-surface/60 hover:border-accent-500/60'}`}>
+              {on && <motion.span layoutId="season-card" className="absolute inset-0 bg-gradient-to-br from-accent-600 to-accent-700" transition={{ type: 'spring', stiffness: 380, damping: 32 }} />}
+              <span className="relative block font-display text-3xl leading-none tracking-wide">T{s.number}</span>
+              <span className={`relative mt-1 block text-xs ${on ? 'text-white/85' : 'text-zinc-400'}`}>{s.episodeCount ? `${s.episodeCount} ${s.episodeCount === 1 ? 'episódio' : 'episódios'}` : 'Em exibição'}{year ? ` · ${year}` : ''}</span>
+            </motion.button>
+          )
+        })}
+      </div>
+      <AnimatePresence mode="wait">
+        {season != null && (
+          <motion.div key={season} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} className="mt-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-semibold">{seasons.find((s) => s.number === season)?.name || `Temporada ${season}`}</h3>
+              <button type="button" className={btn} onClick={() => onDownload(season)}><Download size={16} />Baixar temporada {season}</button>
+            </div>
+            {eps.loading ? <Spinner /> : (
+              <motion.ul initial="hidden" animate="show" variants={{ show: { transition: { staggerChildren: 0.03 } } }} className="grid gap-2 md:grid-cols-2">
+                {eps.data?.map((e) => (
+                  <motion.li key={e.number} variants={{ hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } }} className="glass flex gap-3 rounded-xl p-3">
+                    {e.stillUrl && <img src={e.stillUrl} alt="" className="h-16 w-28 shrink-0 rounded-lg object-cover" loading="lazy" />}
+                    <div className="min-w-0 text-sm"><b className="text-accent-400">{e.number}.</b> {e.name} <span className="text-xs text-zinc-500">{e.airDate}</span>
+                      <p className="line-clamp-2 text-xs text-zinc-400">{e.overview}</p></div>
+                  </motion.li>
+                ))}
+              </motion.ul>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </section>
+  )
+}
+
 export default function TitlePage() {
   const { source, type, id } = useParams()
   const { data, loading, error } = useAsync(() => api<TitleDetailsT>(`/catalog/title/${source}/${type}/${id}`), [source, type, id])
-  const [season, setSeason] = useState<number | null>(null)
   const [full, setFull] = useState(false)
-  const eps = useAsync(() => (season == null ? Promise.resolve([] as Episode[]) : api<Episode[]>(`/catalog/title/tmdb/tv/${id}/seasons/${season}`)), [season, id])
+  const [request, setRequest] = useState<SearchRequest>()
+  const reqN = useRef(0)
   const { scrollY } = useScroll()
   const bgY = useTransform(scrollY, [0, 400], [0, 120])
   if (loading) return <Spinner />
@@ -266,6 +397,11 @@ export default function TitlePage() {
   const genres = anime ? item.genres.map(genrePt) : item.genres
   const exploreTo = (g: string) => (anime ? `/animes/explore?genre=${encodeURIComponent(item.genres[genres.indexOf(g)])}` : undefined)
   const long = (item.overview ?? '').length > 380
+  const seasonCount = seasons.length || item.seasons || 0
+  const goDownload = (season: number | null) => {
+    setRequest({ n: ++reqN.current, season })
+    document.getElementById('baixar')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
   return (
     <div>
       <div className="relative -mx-4 -mt-6 h-72 overflow-hidden md:h-96">
@@ -287,7 +423,7 @@ export default function TitlePage() {
               <Fact icon={Calendar} label="Ano" value={item.year} />
               <Fact icon={Film} label="Formato" value={formatPt(item.format)} />
               <Fact icon={Layers} label="Episódios" value={item.episodes} />
-              <Fact icon={Layers} label="Temporadas" value={item.seasons} />
+              <Fact icon={Layers} label="Temporadas" value={seasonCount || null} />
               <Fact icon={Clock} label="Duração" value={item.runtime ? `${item.runtime} min` : null} />
               <Fact icon={Radio} label="Status" value={statusPt(item.status)} />
               <Fact icon={Mic2} label="Estúdio" value={item.studio} />
@@ -297,6 +433,15 @@ export default function TitlePage() {
             {item.rating ? <Score value={item.rating} big /> : null}
             {genres.map((g) => <Chip key={g} to={exploreTo(g)}>{g}</Chip>)}
           </motion.div>
+          <motion.div variants={{ hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0 } }} className="mt-6 flex flex-wrap items-center gap-3">
+            <motion.button type="button" onClick={() => goDownload(null)} whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.95 }}
+              className="group relative inline-flex items-center gap-2.5 overflow-hidden rounded-xl bg-accent-600 px-6 py-3 text-base font-bold text-white shadow-xl shadow-accent-600/30 transition hover:bg-accent-500">
+              <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/25 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
+              <Download size={20} className="relative transition-transform group-hover:translate-y-0.5" />
+              <span className="relative">Baixar {kindNoun(item.kind)}</span>
+            </motion.button>
+            {seasonCount > 1 && <span className="text-xs text-zinc-400">{seasonCount} temporadas disponíveis para buscar</span>}
+          </motion.div>
           <motion.div variants={{ hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0 } }} className="glass mt-5 rounded-2xl p-5">
             <h3 className="mb-2 text-xs font-bold uppercase tracking-widest text-accent-400">Sinopse</h3>
             <p className={`text-sm leading-relaxed text-zinc-200 ${!full && long ? 'line-clamp-5' : ''}`}>{item.overview || 'Sem sinopse disponível.'}</p>
@@ -305,31 +450,8 @@ export default function TitlePage() {
         </motion.div>
       </div>
       <CastSection directors={data.directors ?? []} cast={data.cast ?? []} />
-      {seasons.length > 0 && (
-        <section className="mt-10">
-          <h2 className="mb-4 flex items-center gap-2 font-display text-2xl font-semibold tracking-wide"><Tv size={20} className="text-accent-400" />Temporadas</h2>
-          <div className="mb-4 flex flex-wrap gap-2">
-            {seasons.map((s) => (
-              <button key={s.number} onClick={() => setSeason(season === s.number ? null : s.number)} className="relative rounded-full border border-line px-4 py-1.5 text-sm font-semibold transition hover:border-accent-500/60">
-                {season === s.number && <motion.span layoutId="season-pill" className="absolute inset-0 rounded-full bg-accent-600" />}
-                <span className="relative">T{s.number} <span className="text-xs opacity-70">({s.episodeCount})</span></span>
-              </button>
-            ))}
-          </div>
-          {season != null && (eps.loading ? <Spinner /> : (
-            <motion.ul initial="hidden" animate="show" variants={{ show: { transition: { staggerChildren: 0.03 } } }} className="grid gap-2 md:grid-cols-2">
-              {eps.data?.map((e) => (
-                <motion.li key={e.number} variants={{ hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } }} className="glass flex gap-3 rounded-xl p-3">
-                  {e.stillUrl && <img src={e.stillUrl} alt="" className="h-16 w-28 shrink-0 rounded-lg object-cover" loading="lazy" />}
-                  <div className="min-w-0 text-sm"><b className="text-accent-400">{e.number}.</b> {e.name} <span className="text-xs text-zinc-500">{e.airDate}</span>
-                    <p className="line-clamp-2 text-xs text-zinc-400">{e.overview}</p></div>
-                </motion.li>
-              ))}
-            </motion.ul>
-          ))}
-        </section>
-      )}
-      <ReleaseSearch d={data} />
+      {seasons.length > 0 && <Seasons seasons={seasons} tvId={data.tvId ?? (source === 'tmdb' ? id ?? null : null)} onDownload={goDownload} />}
+      <ReleaseSearch d={data} request={request} />
     </div>
   )
 }

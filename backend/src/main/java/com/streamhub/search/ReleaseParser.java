@@ -4,14 +4,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
-final class ReleaseParser {
+public final class ReleaseParser {
     private ReleaseParser() {}
 
     private static boolean has(String t, String regex) {
         return Pattern.compile(regex, Pattern.CASE_INSENSITIVE).matcher(t).find();
     }
 
-    static String resolution(String t) {
+    public static String resolution(String t) {
         if (has(t, "2160p|\\b4k\\b|\\buhd\\b")) return "4K";
         if (has(t, "1080[pi]")) return "1080p";
         if (has(t, "720p")) return "720p";

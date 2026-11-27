@@ -1,3 +1,5 @@
+import { isTV } from './lib/tv'
+
 export type CatalogItem = {
   ref: string; source: string; type: string; id: string; kind: 'MOVIE' | 'SERIES' | 'ANIME'
   title: string; originalTitle?: string; overview?: string; posterUrl?: string; backdropUrl?: string
@@ -22,6 +24,9 @@ export type Location = {
 }
 export type Disk = { name: string; fsType: string; rootIndex: number; relativePath: string; usage: Usage; writable: boolean }
 export type Root = { index: number; path: string; exists: boolean; usage: Usage }
+export type MediaFolder = { name: string; path: string; rootIndex: number; relativePath: string; kind: string; locationId?: number; ignored: boolean }
+export type DiskSource = { name: string; path: string; fsType: string; disk: boolean; usage: Usage; writable: boolean; folders: MediaFolder[] }
+export type Discovery = { autoRegister: boolean; sources: DiskSource[]; warnings: { code: string; message: string }[] }
 export type Download = {
   id: number; title: string; kind: string; indexer?: string; status: string; progress: number; sizeBytes: number
   downloadedBytes: number; dlSpeed: number; upSpeed: number; etaSeconds?: number; destination: string
@@ -30,6 +35,8 @@ export type Download = {
 export type LibraryFile = {
   id: string; name: string; group: string; kind: string; sizeBytes: number; season?: number; episode?: number
   location: string; relativePath: string; modified: string
+  /** Resolução do vídeo ("1080p", "4K"…), quando conhecida. */
+  quality?: string | null
 }
 export type Indexer = { id: number; name: string; enabled: boolean; protocol: string; privacy: string; implementation: string; failing: boolean }
 export type Integration = {
@@ -37,10 +44,12 @@ export type Integration = {
 }
 
 const KEY = 'streamhub.auth'
+// na TV o login fica salvo (ninguém quer digitar a senha no controle remoto toda vez que abre o app)
+const store = () => (isTV ? localStorage : sessionStorage)
 export const auth = {
-  get: () => sessionStorage.getItem(KEY),
-  set: (user: string, pass: string) => sessionStorage.setItem(KEY, 'Basic ' + btoa(`${user}:${pass}`)),
-  clear: () => sessionStorage.removeItem(KEY),
+  get: () => store().getItem(KEY),
+  set: (user: string, pass: string) => store().setItem(KEY, 'Basic ' + btoa(`${user}:${pass}`)),
+  clear: () => store().removeItem(KEY),
 }
 
 export class ApiError extends Error {
@@ -85,12 +94,15 @@ export const fmtEta = (s?: number) => {
 }
 export const kindLabel: Record<string, string> = { MOVIE: 'Filme', SERIES: 'Série', ANIME: 'Anime', GENERAL: 'Geral' }
 export type Person = { name: string; role?: string; photoUrl?: string }
-export type TitleDetailsT = { item: CatalogItem; seasons: Season[]; directors: Person[]; cast: Person[] }
+/** tvId: série do TMDB de onde vêm as temporadas (num anime, a correspondente encontrada pelo título). */
+/** searchTitles: nomes para buscar downloads, começando pelo inglês (como os releases costumam ser nomeados). */
+export type TitleDetailsT = { item: CatalogItem; seasons: Season[]; directors: Person[]; cast: Person[]; tvId?: string | null; searchTitles?: string[] }
 export type AudioTrack = { index: number; codec?: string; language?: string; title?: string; channels: number }
 export type SubTrack = { index: number; codec?: string; language?: string; title?: string; textBased: boolean }
-/** Trecho marcado nos capítulos do arquivo que o player oferece pular. */
-export type SkipSegment = { kind: 'intro' | 'recap' | 'credits' | 'preview'; start: number; end: number }
-export type MediaInfo = { duration: number; videoCodec?: string; directPlay: boolean; audio: AudioTrack[]; subtitles: SubTrack[]; skips?: SkipSegment[] }
+/** Trecho que o player oferece pular: dos capítulos do arquivo ou, em animes sem capítulos, do AniSkip. */
+/** mixed: a abertura/encerramento passa junto com cenas novas do episódio (marcado no AniSkip como "mixed-op"). */
+export type SkipSegment = { kind: 'intro' | 'recap' | 'credits' | 'preview'; start: number; end: number; mixed?: boolean }
+export type MediaInfo = { duration: number; videoCodec?: string; directPlay: boolean; audio: AudioTrack[]; subtitles: SubTrack[]; skips?: SkipSegment[]; fonts?: number; quality?: string | null }
 
 const STATUS: Record<string, string> = {
   FINISHED: 'Finalizado', RELEASING: 'Em exibição', NOT_YET_RELEASED: 'Em breve', CANCELLED: 'Cancelado', HIATUS: 'Em hiato',
@@ -109,7 +121,7 @@ const GENRES: Record<string, string> = {
 }
 export const genrePt = (g: string) => GENRES[g] ?? g
 
-/** Progresso local de reprodução (guardado pelo player no navegador). */
+/** Progresso de reprodução na cópia deste navegador; quem grava e sincroniza com o servidor é lib/progress. */
 export const progressOf = (id: string) => {
   try {
     const pos = Number(localStorage.getItem('streamhub.pos.' + id)) || 0

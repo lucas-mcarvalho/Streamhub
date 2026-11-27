@@ -17,6 +17,11 @@ spring:
 
 server:
   port: ${SERVER_PORT:8080}
+  tomcat:
+    # Na conversão o navegador para de ler quando o buffer dele enche (ou com o vídeo pausado). Com o padrão de 20 s,
+    # a escrita bloqueada estourava o tempo, o Tomcat derrubava a conexão e o player travava ao fim do buffer.
+    connection-timeout: 15m
+    keep-alive-timeout: 20s
 
 management:
   endpoints:
@@ -43,5 +48,6 @@ streamhub:
   storage:
     allowed-roots: ${STORAGE_ALLOWED_ROOTS:/media}
     disks-dir: ${STORAGE_DISKS_DIR:/disks}
+    disks-host-dir: ${STORAGE_DISKS_HOST_DIR:}
     min-free-gb: ${STORAGE_MIN_FREE_GB:5}
     qbit-path-map: ${QBIT_PATH_MAP:}

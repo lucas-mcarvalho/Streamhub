@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -45,11 +46,35 @@ public class LibraryService {
 
     public record SubTrack(int index, String codec, String language, String title, boolean textBased) {}
 
-    /** Trecho que o player oferece pular: {@code intro}, {@code recap}, {@code credits} ou {@code preview}. */
-    public record SkipSegment(String kind, double start, double end) {}
+    /**
+     * Trecho que o player oferece pular: {@code intro}, {@code recap}, {@code credits} ou {@code preview}.
+     * {@code mixed}: a abertura/encerramento passa junto com cenas novas do episódio (o player não pula sozinho).
+     */
+    public record SkipSegment(String kind, double start, double end, boolean mixed) {
+        public SkipSegment(String kind, double start, double end) { this(kind, start, end, false); }
+    }
 
     public record MediaInfo(double duration, String videoCodec, String pixFmt, boolean directPlay,
-                            List<AudioTrack> audio, List<SubTrack> subtitles, List<SkipSegment> skips) {}
+                            List<AudioTrack> audio, List<SubTrack> subtitles, List<SkipSegment> skips, int fonts, String quality) {}
+
+    /** Nome da resolução pelo tamanho real da imagem; a largura conta porque filmes em tela larga têm menos linhas. */
+    static String qualityLabel(int width, int height) {
+        if (width <= 0 && height <= 0) return null;
+        if (width >= 3800 || height >= 2000) return "4K";
+        if (width >= 2500 || height >= 1400) return "1440p";
+        if (width >= 1900 || height >= 1000) return "1080p";
+        if (width >= 1260 || height >= 700) return "720p";
+        if (width >= 840 || height >= 460) return "480p";
+        return Math.max(height, 0) + "p";
+    }
+
+    /** Resolução indicada no nome do arquivo; sem ela, a real, se o arquivo já foi analisado. */
+    private String qualityOf(Path p, String fileName, long modifiedMillis) {
+        String q = com.streamhub.search.ReleaseParser.resolution(fileName);
+        if (!"?".equals(q)) return q;
+        MediaInfo cached = infoCache.get(p + "|" + modifiedMillis);
+        return cached == null ? null : cached.quality();
+    }
 
     record Chapter(String title, double start, double end) {}
 
@@ -126,6 +151,36 @@ public class LibraryService {
         return dot < 0 ? "" : n.substring(dot + 1).toLowerCase();
     }
 
+    /** Pasta do título (primeiro nível dentro do local), temporada e episódio de um arquivo, pelo caminho relativo. */
+    public record EpisodeRef(String group, Integer season, Integer episode) {}
+
+    static EpisodeRef episodeRef(String rel) {
+        String fileName = rel.substring(rel.lastIndexOf('/') + 1);
+        String group = rel.contains("/") ? rel.substring(0, rel.indexOf('/')) : fileName.replaceFirst("\\.[^.]+$", "");
+        Matcher m = SXXEYY.matcher(fileName);
+        Integer season = null, ep = null;
+        if (m.find()) {
+            season = Integer.valueOf(m.group(1) != null ? m.group(1) : m.group(3));
+            ep = Integer.valueOf(m.group(2) != null ? m.group(2) : m.group(4));
+        } else {
+            Matcher a = ABSOLUTE.matcher(fileName);
+            while (a.find()) {   // vale o último "- NNN" do nome; ignora anos
+                int n = Integer.parseInt(a.group(1));
+                if (n > 0 && !(n >= 1900 && n <= 2099)) ep = n;
+            }
+        }
+        return new EpisodeRef(group, season, ep);
+    }
+
+    /** Tipo do local (ANIME, SERIES…) e posição do arquivo na série, a partir do id opaco. */
+    public Map.Entry<String, EpisodeRef> describe(String id) {
+        resolve(id);   // valida o id e a existência do arquivo
+        String raw = new String(Base64.getUrlDecoder().decode(id), StandardCharsets.UTF_8);
+        int i = raw.indexOf('|');
+        StorageLocation loc = storage.get(Long.parseLong(raw.substring(0, i)));
+        return Map.entry(loc.getKind(), episodeRef(raw.substring(i + 1).replace('\\', '/')));
+    }
+
     public List<LibraryFile> list(String kind) {
         List<LibraryFile> out = new ArrayList<>();
         for (StorageLocation loc : storage.all()) {
@@ -136,22 +191,11 @@ public class LibraryService {
                 s.filter(Files::isRegularFile).filter(p -> VIDEO.contains(ext(p))).forEach(p -> {
                     String rel = base.relativize(p).toString().replace('\\', '/');
                     String fileName = p.getFileName().toString();
-                    String group = rel.contains("/") ? rel.substring(0, rel.indexOf('/')) : fileName.replaceFirst("\\.[^.]+$", "");
-                    Matcher m = SXXEYY.matcher(fileName);
-                    Integer season = null, ep = null;
-                    if (m.find()) {
-                        season = Integer.valueOf(m.group(1) != null ? m.group(1) : m.group(3));
-                        ep = Integer.valueOf(m.group(2) != null ? m.group(2) : m.group(4));
-                    } else {
-                        Matcher a = ABSOLUTE.matcher(fileName);
-                        while (a.find()) {   // vale o último "- NNN" do nome; ignora anos
-                            int n = Integer.parseInt(a.group(1));
-                            if (n > 0 && !(n >= 1900 && n <= 2099)) ep = n;
-                        }
-                    }
+                    EpisodeRef ref = episodeRef(rel);
                     try {
-                        out.add(new LibraryFile(encodeId(loc.getId(), rel), fileName, group, loc.getKind(), Files.size(p),
-                            Files.getLastModifiedTime(p).toInstant(), season, ep, loc.getName(), rel));
+                        java.nio.file.attribute.FileTime modified = Files.getLastModifiedTime(p);
+                        out.add(new LibraryFile(encodeId(loc.getId(), rel), fileName, ref.group(), loc.getKind(), Files.size(p),
+                            modified.toInstant(), ref.season(), ref.episode(), loc.getName(), rel, qualityOf(p, fileName, modified.toMillis())));
                     } catch (IOException ignored) {
                         // arquivo sumiu durante a varredura
                     }
@@ -239,14 +283,16 @@ public class LibraryService {
         if (cached != null) return cached;
         try {
             String output = run(30, "ffprobe", "-v", "error", "-show_entries",
-                "stream=codec_type,codec_name,pix_fmt,channels:stream_tags=language,title:format=duration"
+                "stream=codec_type,codec_name,pix_fmt,channels,width,height:stream_tags=language,title,mimetype,filename:format=duration"
                     + ":chapter=start_time,end_time:chapter_tags=title",
                 "-of", "compact=p=0", p.toString());
             double duration = 0;
             String vcodec = null, pix = null;
+            int width = 0, height = 0;
             List<AudioTrack> audio = new ArrayList<>();
             List<SubTrack> subs = new ArrayList<>();
             List<Chapter> chapters = new ArrayList<>();
+            int fonts = 0;
             for (String line : output.split("\n")) {
                 java.util.Map<String, String> kv = new java.util.HashMap<>();
                 for (String part : line.trim().split("\\|")) {
@@ -263,6 +309,10 @@ public class LibraryService {
                 } else if ("video".equals(type) && vcodec == null) {
                     vcodec = kv.get("codec_name");
                     pix = kv.get("pix_fmt");
+                    try {
+                        width = Integer.parseInt(kv.getOrDefault("width", "0"));
+                        height = Integer.parseInt(kv.getOrDefault("height", "0"));
+                    } catch (NumberFormatException ignored) { }
                 } else if ("audio".equals(type)) {
                     int ch = 2;
                     try { ch = Integer.parseInt(kv.getOrDefault("channels", "2")); } catch (NumberFormatException ignored) { }
@@ -270,6 +320,8 @@ public class LibraryService {
                 } else if ("subtitle".equals(type)) {
                     String codec = kv.get("codec_name");
                     subs.add(new SubTrack(subs.size(), codec, kv.get("tag:language"), kv.get("tag:title"), TEXT_SUBS.contains(codec)));
+                } else if ("attachment".equals(type) && isFont(kv.get("tag:mimetype"), kv.get("tag:filename"))) {
+                    fonts++;
                 }
             }
             String ext = ext(p);
@@ -277,7 +329,7 @@ public class LibraryService {
                 && vcodec != null && Set.of("h264", "vp8", "vp9", "av1").contains(vcodec)
                 && "yuv420p".equals(pix)
                 && (audio.isEmpty() || Set.of("aac", "mp3", "opus", "vorbis", "flac").contains(audio.get(0).codec()));
-            MediaInfo info = new MediaInfo(duration, vcodec, pix, directPlay, audio, subs, skipsFromChapters(chapters));
+            MediaInfo info = new MediaInfo(duration, vcodec, pix, directPlay, audio, subs, skipsFromChapters(chapters), fonts, qualityLabel(width, height));
             infoCache.put(key, info);
             return info;
         } catch (IOException e) {
@@ -292,7 +344,8 @@ public class LibraryService {
     public record Transcode(Process process, boolean paced) {}
 
     /** Segundos de vídeo entregues sem limite ao abrir ou pular, e depois o ritmo máximo em relação ao tempo real. */
-    private static final double BURST_SECONDS = 30, PACE = 1.5;
+    // PACE acima de 2: assistindo em 2x, um ritmo menor esvaziava o buffer e o vídeo travava
+    private static final double BURST_SECONDS = 30, PACE = 2.5;
 
     /**
      * Inicia o ffmpeg gerando MP4 fragmentado (vídeo copiado quando possível, áudio em AAC estéreo).
@@ -378,6 +431,71 @@ public class LibraryService {
         }
     }
 
+    /** Anexo do MKV que é uma fonte (fansubs embutem as fontes usadas nas legendas .ass). */
+    static boolean isFont(String mimetype, String filename) {
+        String m = mimetype == null ? "" : mimetype.toLowerCase();
+        String f = filename == null ? "" : filename.toLowerCase();
+        return m.contains("font") || m.contains("truetype") || m.contains("opentype")
+            || f.endsWith(".ttf") || f.endsWith(".otf") || f.endsWith(".ttc") || f.endsWith(".woff") || f.endsWith(".woff2");
+    }
+
+    /** Legenda .ass/.ssa original, com estilos e posições, para o player desenhar como nos serviços de anime. */
+    public String subtitleAss(String id, int index) {
+        Path p = resolve(id);
+        MediaInfo info = info(id);
+        if (index < 0 || index >= info.subtitles().size()) throw new ApiException(HttpStatus.NOT_FOUND, "NO_SUB", "Legenda não encontrada");
+        String codec = info.subtitles().get(index).codec();
+        if (!"ass".equals(codec) && !"ssa".equals(codec)) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "NOT_ASS", "A legenda não está no formato ASS");
+        }
+        try {
+            return run(90, "ffmpeg", "-v", "error", "-nostdin", "-i", p.toString(), "-map", "0:s:" + index, "-c:s", "copy", "-f", "ass", "pipe:1");
+        } catch (IOException e) {
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "SUB_FAILED", "Não foi possível extrair a legenda");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "INTERRUPTED", "Interrompido");
+        }
+    }
+
+    /** Extrai a n-ésima fonte anexada ao arquivo (guardada em cache no diretório temporário). */
+    public Path font(String id, int n) {
+        Path p = resolve(id);
+        if (n < 0 || n >= info(id).fonts()) throw new ApiException(HttpStatus.NOT_FOUND, "NO_FONT", "Fonte não encontrada");
+        try {
+            List<Integer> idx = new ArrayList<>();
+            String out = run(30, "ffprobe", "-v", "error", "-select_streams", "t", "-show_entries", "stream=index:stream_tags=mimetype,filename",
+                "-of", "compact=p=0", p.toString());
+            for (String line : out.split("\n")) {
+                java.util.Map<String, String> kv = new java.util.HashMap<>();
+                for (String part : line.trim().split("\\|")) {
+                    String[] a = part.split("=", 2);
+                    if (a.length == 2) kv.put(a[0], a[1]);
+                }
+                if (kv.containsKey("index") && isFont(kv.get("tag:mimetype"), kv.get("tag:filename"))) idx.add(Integer.parseInt(kv.get("index")));
+            }
+            if (n >= idx.size()) throw new ApiException(HttpStatus.NOT_FOUND, "NO_FONT", "Fonte não encontrada");
+            byte[] h = MessageDigest.getInstance("SHA-256").digest((p + "|" + p.toFile().lastModified() + "|" + idx.get(n)).getBytes(StandardCharsets.UTF_8));
+            Path dir = Path.of(System.getProperty("java.io.tmpdir"), "streamhub-fonts");
+            Files.createDirectories(dir);
+            Path target = dir.resolve(java.util.HexFormat.of().formatHex(h, 0, 16));
+            if (!Files.exists(target)) {
+                Path part = Files.createTempFile(dir, "font", ".part");
+                Files.delete(part); // o ffmpeg recusa sobrescrever sem -y; deixa o nome livre
+                // -dump_attachment grava o anexo; sem saída, o ffmpeg termina com erro depois de gravar, o que é esperado
+                run(60, "ffmpeg", "-v", "error", "-nostdin", "-y", "-dump_attachment:" + idx.get(n), part.toString(), "-i", p.toString());
+                if (!Files.exists(part) || Files.size(part) == 0) throw new IOException("anexo vazio");
+                Files.move(part, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            }
+            return target;
+        } catch (IOException | NumberFormatException | java.security.NoSuchAlgorithmException e) {
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "FONT_FAILED", "Não foi possível extrair a fonte");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "INTERRUPTED", "Interrompido");
+        }
+    }
+
     /** Apaga os arquivos de vídeo informados e remove as pastas que ficarem vazias (sem sair do local registrado). */
     public int delete(List<String> ids) {
         int deleted = 0;
@@ -452,6 +570,78 @@ public class LibraryService {
         byte[] out = pr.getInputStream().readAllBytes();
         if (!pr.waitFor(20, TimeUnit.SECONDS)) pr.destroyForcibly();
         return out;
+    }
+
+    // ---------- grade de miniaturas para a prévia ao passar o mouse na barra de tempo ----------
+
+    /** Imagem com um quadro a cada {@code interval} segundos, em {@code cols} colunas de {@code tileW}×{@code tileH}. */
+    public record Storyboard(Path image, double interval, int cols, int count, int tileW, int tileH) {}
+
+    private static final int SB_COLS = 10, SB_TILE_W = 200, SB_MAX_TILES = 300;
+    private final java.util.concurrent.ConcurrentHashMap<Path, Object> storyboardLocks = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.Semaphore storyboardSlots = new java.util.concurrent.Semaphore(2);
+
+    /** Um quadro a cada 5 s, espaçando mais em vídeos longos para a imagem não passar de {@value #SB_MAX_TILES} quadros. */
+    static double storyboardInterval(double duration) { return Math.max(5, Math.ceil(duration / SB_MAX_TILES)); }
+
+    /**
+     * Gera (uma vez por arquivo, em cache no diretório temporário) a grade de miniaturas do vídeo.
+     * Decodifica só os quadros-chave, o que é rápido mesmo em HEVC 10 bits; a precisão fica no espaçamento entre eles.
+     */
+    public Storyboard storyboard(String id) {
+        Path p = resolve(id);
+        double duration = info(id).duration();
+        if (!(duration > 0)) throw new ApiException(HttpStatus.NOT_FOUND, "NO_STORYBOARD", "Duração do vídeo desconhecida");
+        double interval = storyboardInterval(duration);
+        int count = (int) Math.ceil(duration / interval);
+        int rows = (count + 1 + SB_COLS - 1) / SB_COLS; // +1: o filtro fps às vezes solta um quadro a mais no fim
+        try {
+            byte[] h = MessageDigest.getInstance("SHA-256").digest((p + "|" + p.toFile().lastModified() + "|" + Files.size(p)
+                + "|" + interval + "|" + SB_COLS + "x" + rows + "|" + SB_TILE_W).getBytes(StandardCharsets.UTF_8));
+            Path dir = Path.of(System.getProperty("java.io.tmpdir"), "streamhub-storyboards");
+            Files.createDirectories(dir);
+            Path target = dir.resolve(java.util.HexFormat.of().formatHex(h, 0, 16) + ".jpg");
+            if (!Files.exists(target)) {
+                synchronized (storyboardLocks.computeIfAbsent(target, k -> new Object())) {
+                    if (!Files.exists(target)) {
+                        storyboardSlots.acquire();
+                        try {
+                            Path part = dir.resolve(target.getFileName() + ".part.jpg");
+                            run(600, "ffmpeg", "-v", "error", "-nostdin", "-y", "-skip_frame", "nokey", "-i", p.toString(),
+                                "-an", "-sn", "-dn", "-vf", "fps=1/" + (long) interval + ",scale=" + SB_TILE_W + ":-2,tile=" + SB_COLS + "x" + rows,
+                                "-frames:v", "1", "-q:v", "5", part.toString());
+                            if (!Files.exists(part) || Files.size(part) == 0) throw new IOException("grade vazia");
+                            Files.move(part, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                        } finally {
+                            storyboardSlots.release();
+                            storyboardLocks.remove(target);
+                        }
+                    }
+                }
+            }
+            int[] size = imageSize(target);
+            return new Storyboard(target, interval, SB_COLS, count, size[0] / SB_COLS, size[1] / rows);
+        } catch (IOException | java.security.NoSuchAlgorithmException e) {
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "STORYBOARD_FAILED", "Não foi possível gerar as miniaturas");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "INTERRUPTED", "Interrompido");
+        }
+    }
+
+    /** Largura e altura de uma imagem lendo só o cabeçalho. */
+    private static int[] imageSize(Path img) throws IOException {
+        try (javax.imageio.stream.ImageInputStream in = javax.imageio.ImageIO.createImageInputStream(img.toFile())) {
+            java.util.Iterator<javax.imageio.ImageReader> readers = javax.imageio.ImageIO.getImageReaders(in);
+            if (!readers.hasNext()) throw new IOException("formato desconhecido");
+            javax.imageio.ImageReader r = readers.next();
+            try {
+                r.setInput(in);
+                return new int[] { r.getWidth(0), r.getHeight(0) };
+            } finally {
+                r.dispose();
+            }
+        }
     }
 
     // ---------- token de streaming (a tag <video> não envia cabeçalho Authorization) ----------

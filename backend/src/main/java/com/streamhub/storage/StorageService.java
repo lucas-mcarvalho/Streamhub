@@ -81,6 +81,8 @@ public class StorageService {
         return out;
     }
 
+    Path disksDir() { return disksDir; }
+
     /** Discos montados no PC (visíveis em DISKS_DIR): só entram pastas que são ponto de montagem de outro dispositivo. */
     public List<DiskView> disks() {
         int idx = roots.indexOf(disksDir);
@@ -148,7 +150,7 @@ public class StorageService {
     // ---------- disco desconectado / remontado com outro nome ----------
 
     /** Pasta vazia que sobrou na memória (tmpfs) onde o disco deveria estar montado. */
-    private static boolean ramBacked(Path p) {
+    static boolean ramBacked(Path p) {
         Path e = nearestExisting(p);
         if (e == null) return false;
         try {

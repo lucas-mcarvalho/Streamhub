@@ -43,3 +43,32 @@ body {
 @media (pointer: coarse) {
   input[type='range'].seek { height: 28px; }
 }
+
+/* Legenda no estilo de anime (Crunchyroll/Jellyfin): branca, sem caixa, contorno preto grosso e sombra. */
+.anime-sub {
+  font-family: 'Trebuchet MS', 'Segoe UI', Arial, sans-serif;
+  font-weight: 700;
+  font-size: clamp(17px, 3.1vw, 46px);
+  line-height: 1.22;
+  color: #fff;
+  letter-spacing: 0.01em;
+  -webkit-text-stroke: 0.14em #000;
+  paint-order: stroke fill;
+  text-shadow: 0 0.06em 0.12em rgb(0 0 0 / 0.85), 0 0 0.25em rgb(0 0 0 / 0.5);
+}
+
+/* ---------- Modo TV (app Android TV): foco visível para o controle remoto ---------- */
+html.tv { scroll-behavior: auto; }
+html.tv body { cursor: none; }
+html.tv *:focus { outline: none; }
+html.tv :is(a, button, input, select, textarea, [tabindex]):focus {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 6px rgb(var(--accent) / 0.45);
+}
+/* cartões dentro das fileiras: o contorno fica por dentro para não ser cortado pela rolagem */
+html.tv .group > a:focus, html.tv .group[role='button']:focus { outline-offset: -3px; box-shadow: none; }
+html.tv .group > a:focus img, html.tv .group[role='button']:focus img { transform: scale(1.06); }
+html.tv .no-scrollbar.overflow-x-auto { padding-top: 10px; padding-bottom: 16px; scroll-padding-inline: 48px; }
+html.tv .tv-hidden { display: none !important; }
+html:not(.tv) .tv-only { display: none !important; }

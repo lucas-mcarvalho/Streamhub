@@ -27,7 +27,10 @@ public class TmdbClient {
     private Map<String, Object> get(String path, Object... kv) {
         String key = integrations.require(Svc.TMDB).secret();
         boolean bearer = key.length() > 40;
-        List<Object> params = new ArrayList<>(List.of("language", "pt-BR"));
+        List<Object> params = new ArrayList<>();
+        boolean lang = false;
+        for (int i = 0; i < kv.length; i += 2) lang |= "language".equals(kv[i]);
+        if (!lang) { params.add("language"); params.add("pt-BR"); }   // padrão pt-BR, a menos que a chamada peça outro idioma
         for (Object o : kv) params.add(o);
         if (!bearer) { params.add("api_key"); params.add(key); }
         RestClient.Builder b = Http.builder(BASE);
@@ -36,6 +39,12 @@ public class TmdbClient {
     }
 
     public void ping() { get("/configuration"); }
+
+    /** Título em inglês (como os releases costumam ser nomeados); nulo se não houver. */
+    public String englishTitle(String type, String id) {
+        Map<String, Object> m = get("/" + type + "/" + id, "language", "en-US");
+        return J.str(type.equals("movie") ? m.get("title") : m.get("name"));
+    }
 
     private Map<Integer, String> genres(String type) {
         return genreCache.computeIfAbsent(type, t -> {
